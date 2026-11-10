@@ -732,7 +732,7 @@ export const RECORD_DEFS: Record<string, RecordDef> = {
       NNAM: sub("Next Perk", fid("Perk")),
     },
   },
-  RACE: { name: "Race", subs: { SPCT: COMMON.SPCT!, SPLO: COMMON.SPLO! } },
+  RACE: { name: "Race", subs: { SPCT: COMMON["SPCT"]!, SPLO: COMMON["SPLO"]! } },
   WRLD: { name: "Worldspace", subs: { WNAM: sub("Parent Worldspace", fid("Worldspace")), CNAM: sub("Climate", fid("Climate")), NAM2: sub("Water", fid("Water")) } },
 };
 
