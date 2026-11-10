@@ -34,3 +34,4 @@ use the editor.
 - Plugin parsing/serialization lives in `src/lib/esp/format.ts` and runs entirely in the browser; keep it UI-free so it stays testable.
 - Records keep their original bytes until edited (`markDirty` before any mutation), so untouched records save byte-for-byte identical.
 - Field names/layouts per record type live in `src/lib/esp/defs.ts` (hand-written from TES5Edit's wbDefinitionsTES5.pas); `decode.ts` turns them into editable rows. Unknown subrecords must still fall back to raw text/hex so nothing becomes uneditable.
+- Browser download dispatch and delayed URL cleanup live in a UI-free helper; anchor clicks cannot confirm disk writes, so download feedback must not clear unsaved edits or claim completion.
