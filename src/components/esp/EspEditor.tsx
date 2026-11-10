@@ -1,20 +1,27 @@
-import { useRef, useState } from "react";
-import { Download, FolderOpen, Search, X } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Download, FolderOpen, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { DecodeContext } from "@/lib/esp/decode";
 import {
+  buildFormIdIndex,
   countRecords,
+  describeGroup,
+  fileInfo,
+  getDisplayName,
   getEditorId,
   hex8,
   parseEsp,
-  searchRecords,
   serializeEsp,
+  walkRecords,
   type EspFile,
   type EspGroup,
   type EspRecord,
 } from "@/lib/esp/format";
-import { RecordTree } from "./RecordTree";
-import { RecordPanel } from "./RecordPanel";
+import { RecordRow, RecordTree, TREE_COLS } from "./RecordTree";
+import { RecordView } from "./RecordView";
+
+const MAX_RESULTS = 500;
 
 export function EspEditor() {
   const [file, setFile] = useState<EspFile | null>(null);
@@ -23,29 +30,52 @@ export function EspEditor() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [modified, setModified] = useState(false);
-  const [query, setQuery] = useState("");
+  const [filterId, setFilterId] = useState("");
+  const [filterEdid, setFilterEdid] = useState("");
   const [results, setResults] = useState<EspRecord[] | null>(null);
-  const [, setRev] = useState(0);
+  const [rev, setRev] = useState(0);
+  const [indexRev, setIndexRev] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const changed = () => {
+  const index = useMemo(() => (file ? buildFormIdIndex(file) : new Map<number, EspRecord>()), [file, indexRev]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const info = useMemo(() => (file ? fileInfo(file) : { localized: false, masters: [] }), [file, rev]);
+
+  const ctx: DecodeContext = {
+    localized: info.localized,
+    resolveFormId: (id) => {
+      if (id === 0) return "NULL - Null Reference [00000000]";
+      const r = index.get(id >>> 0);
+      if (r) {
+        const e = getEditorId(r);
+        const n = getDisplayName(r, info.localized);
+        return `${e ?? ""}${n ? ` "${n}"` : ""} [${r.type}:${hex8(id)}]`.trim();
+      }
+      const hi = id >>> 24;
+      if (hi < info.masters.length) return `[${hex8(id)}] from ${info.masters[hi]}`;
+      return `[${hex8(id)}] (not found in this file)`;
+    },
+  };
+
+  const changed = (opts?: { reindex?: boolean }) => {
     setModified(true);
     setRev((r) => r + 1);
+    if (opts?.reindex) setIndexRev((r) => r + 1);
   };
 
   async function openFile(f: File) {
     setLoading(true);
     setError(null);
     try {
-      const buf = new Uint8Array(await f.arrayBuffer());
-      const parsed = parseEsp(buf, f.name);
+      const parsed = parseEsp(new Uint8Array(await f.arrayBuffer()), f.name);
       setFile(parsed);
       setSelected(parsed.nodes[0] as EspRecord);
       setExpanded(new Set());
       setModified(false);
       setResults(null);
-      setQuery("");
+      setFilterId("");
+      setFilterEdid("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -76,9 +106,7 @@ export function EspEditor() {
       for (let g: EspGroup | null = r.parent; g; g = g.parent) next.add(g.uid);
       setExpanded(next);
     }
-    if (window.innerWidth < 1024) {
-      requestAnimationFrame(() => panelRef.current?.scrollIntoView({ behavior: "smooth" }));
-    }
+    if (window.innerWidth < 1024) requestAnimationFrame(() => panelRef.current?.scrollIntoView({ behavior: "smooth" }));
   }
 
   function toggle(uid: number) {
@@ -88,19 +116,38 @@ export function EspEditor() {
     setExpanded(next);
   }
 
-  function runSearch(e: React.FormEvent) {
+  function runFilter(e: React.FormEvent) {
     e.preventDefault();
     if (!file) return;
-    setResults(searchRecords(file, query));
+    const id = filterId.trim().replace(/^0x/i, "").toUpperCase();
+    const ed = filterEdid.trim().toLowerCase();
+    if (!id && !ed) return setResults(null);
+    const out: EspRecord[] = [];
+    for (const r of walkRecords(file.nodes)) {
+      if (id && !hex8(r.formId).includes(id)) continue;
+      if (ed && !(getEditorId(r) ?? "").toLowerCase().includes(ed)) continue;
+      out.push(r);
+      if (out.length >= MAX_RESULTS) break;
+    }
+    setResults(out);
+  }
+
+  const breadcrumb: string[] = [];
+  if (file && selected) {
+    for (let g: EspGroup | null = selected.parent; g; g = g.parent) breadcrumb.unshift(describeGroup(g));
+    breadcrumb.unshift(file.name);
+    const e = getEditorId(selected);
+    breadcrumb.push(selected.type === "TES4" ? "File Header" : `${hex8(selected.formId)}${e ? ` <${e}>` : ""}`);
   }
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b bg-card px-4 py-3">
+    <div className="flex min-h-screen flex-col lg:h-screen">
+      <header className="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-2">
         <h1 className="font-display text-lg tracking-wide text-primary">Skyrim ESP Editor</h1>
         {file && (
           <span className="truncate font-mono text-xs text-muted-foreground">
-            {file.name} · {countRecords(file.nodes).toLocaleString()} records
+            {countRecords(file.nodes).toLocaleString()} records
+            {info.masters.length > 0 && ` · masters: ${info.masters.join(", ")}`}
             {modified && <span className="ml-2 text-modified">● unsaved changes</span>}
           </span>
         )}
@@ -124,6 +171,12 @@ export function EspEditor() {
           </Button>
         </div>
       </header>
+
+      {file && (
+        <div className="truncate border-b bg-muted px-4 py-1 font-mono text-xs text-muted-foreground" title={breadcrumb.join(" \\ ")}>
+          {breadcrumb.length ? breadcrumb.join(" \\ ") : file.name}
+        </div>
+      )}
 
       {error && (
         <div className="flex items-start gap-2 border-b border-destructive bg-destructive/15 px-4 py-2 text-sm">
@@ -155,64 +208,72 @@ export function EspEditor() {
           </div>
         </div>
       ) : (
-        <div className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(320px,420px)_1fr]">
-          <aside className="flex flex-col border-b lg:h-[calc(100vh-57px)] lg:border-r lg:border-b-0">
-            <form onSubmit={runSearch} className="flex gap-2 border-b p-3">
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Editor ID, Form ID or type"
-                className="font-mono text-sm"
-              />
-              <Button type="submit" size="icon" variant="secondary" aria-label="Search">
-                <Search />
-              </Button>
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(360px,460px)_1fr]">
+          <aside className="flex min-h-0 flex-col border-b lg:border-r lg:border-b-0">
+            <form onSubmit={runFilter} className="grid grid-cols-[auto_1fr_auto_1fr] items-center gap-2 border-b p-2 text-xs">
+              <label htmlFor="flt-id" className="text-muted-foreground">FormID</label>
+              <Input id="flt-id" value={filterId} onChange={(e) => setFilterId(e.target.value)} className="h-7 font-mono text-xs" />
+              <label htmlFor="flt-ed" className="text-muted-foreground">Editor ID</label>
+              <Input id="flt-ed" value={filterEdid} onChange={(e) => setFilterEdid(e.target.value)} className="h-7 font-mono text-xs" />
+              <button type="submit" className="sr-only">Filter</button>
             </form>
-            {results && (
-              <div className="max-h-64 overflow-auto border-b">
-                <div className="flex items-center justify-between px-3 py-1.5 text-xs text-muted-foreground">
-                  <span>
-                    {results.length >= 200 ? "First 200 matches" : `${results.length} matches`}
-                  </span>
-                  <button onClick={() => setResults(null)} className="hover:text-foreground">
-                    Clear
-                  </button>
-                </div>
-                {results.map((r) => (
-                  <button
-                    key={r.uid}
-                    onClick={() => select(r, true)}
-                    className="flex w-full gap-2 px-3 py-1 text-left font-mono text-xs hover:bg-accent"
-                  >
-                    <span className="text-primary">{r.type}</span>
-                    <span className="text-muted-foreground">{hex8(r.formId)}</span>
-                    <span className="truncate">{getEditorId(r)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="max-h-[50vh] flex-1 overflow-auto py-1 lg:max-h-none">
-              <RecordTree
-                nodes={file.nodes}
-                depth={0}
-                expanded={expanded}
-                selected={selected}
-                onToggle={toggle}
-                onSelect={(r) => select(r)}
-              />
+            <div className={`${TREE_COLS} border-b bg-muted px-2 py-1 text-xs font-medium text-muted-foreground`}>
+              <span className="pl-5">FormID</span>
+              <span>EditorID</span>
+              <span>Name</span>
+            </div>
+            <div className="max-h-[45vh] flex-1 overflow-auto py-1 lg:max-h-none">
+              {results ? (
+                <>
+                  <div className="flex items-center justify-between px-3 py-1 text-xs text-muted-foreground">
+                    <span>{results.length >= MAX_RESULTS ? `First ${MAX_RESULTS} matches` : `${results.length} matches`}</span>
+                    <button
+                      onClick={() => {
+                        setResults(null);
+                        setFilterId("");
+                        setFilterEdid("");
+                      }}
+                      className="text-primary hover:underline"
+                    >
+                      Clear filter
+                    </button>
+                  </div>
+                  {results.map((r) => (
+                    <RecordRow
+                      key={r.uid}
+                      record={r}
+                      depth={-1}
+                      selected={selected === r}
+                      localized={info.localized}
+                      onSelect={() => select(r, true)}
+                    />
+                  ))}
+                </>
+              ) : (
+                <RecordTree
+                  nodes={file.nodes}
+                  depth={0}
+                  expanded={expanded}
+                  selected={selected}
+                  localized={info.localized}
+                  onToggle={toggle}
+                  onSelect={(r) => select(r)}
+                />
+              )}
             </div>
           </aside>
-          <main ref={panelRef} className="min-w-0 lg:h-[calc(100vh-57px)] lg:overflow-auto">
+          <main ref={panelRef} className="min-w-0 overflow-auto">
             {selected ? (
-              <RecordPanel
+              <RecordView
                 key={selected.uid}
                 file={file}
                 record={selected}
+                ctx={ctx}
                 onChange={changed}
                 onDeleted={() => {
                   setSelected(null);
                   setResults((res) => res?.filter((r) => r !== selected) ?? null);
-                  changed();
+                  changed({ reindex: true });
                 }}
               />
             ) : (
