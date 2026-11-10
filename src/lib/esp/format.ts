@@ -35,6 +35,7 @@ export interface EspRecord {
   dirty: boolean;
   parent: EspGroup | null;
   editorIdCache?: string | null | undefined;
+  nameCache?: string | null | undefined;
 }
 
 export interface EspGroup {
@@ -174,6 +175,7 @@ export function markDirty(r: EspRecord) {
   getSubrecords(r);
   r.dirty = true;
   r.editorIdCache = undefined;
+  r.nameCache = undefined;
 }
 
 export function serializeSubrecords(subs: Subrecord[]): Uint8Array {
@@ -417,4 +419,56 @@ export function deleteRecord(file: EspFile, r: EspRecord) {
       dv.setInt32(4, Math.max(0, dv.getInt32(4, true) - 1), true);
     }
   }
+}
+
+/** Data of the first subrecord with this signature, without fully parsing the record. */
+export function peekSubrecord(r: EspRecord, type: string): Uint8Array | null {
+  if (r.subrecords) return r.subrecords.find((s) => s.type === type)?.data ?? null;
+  const d = decodeRaw(r);
+  const dv = view(d);
+  let o = 0;
+  let pending: number | null = null;
+  while (o + 6 <= d.length) {
+    const t = sig(d, o);
+    let size = dv.getUint16(o + 4, true);
+    o += 6;
+    if (pending !== null) (size = pending), (pending = null);
+    if (t === "XXXX" && size === 4) {
+      pending = dv.getUint32(o, true);
+    } else if (t === type) {
+      return d.subarray(o, o + size);
+    }
+    o += size;
+  }
+  return null;
+}
+
+/** The record's in-game name (FULL), or null when missing or stored in a strings file. */
+export function getDisplayName(r: EspRecord, localized: boolean): string | null {
+  if (r.nameCache !== undefined) return r.nameCache;
+  let result: string | null = null;
+  if (!localized) {
+    try {
+      const d = peekSubrecord(r, "FULL");
+      result = d ? zstringValue(d) : null;
+    } catch {
+      result = null;
+    }
+  }
+  r.nameCache = result;
+  return result;
+}
+
+export function fileInfo(file: EspFile): { localized: boolean; masters: string[] } {
+  const tes4 = file.nodes[0] as EspRecord;
+  const masters = getSubrecords(tes4)
+    .filter((s) => s.type === "MAST")
+    .map((s) => zstringValue(s.data));
+  return { localized: (tes4.flags & 0x80) !== 0, masters };
+}
+
+export function buildFormIdIndex(file: EspFile): Map<number, EspRecord> {
+  const m = new Map<number, EspRecord>();
+  for (const r of walkRecords(file.nodes)) if (r.type !== "TES4") m.set(r.formId >>> 0, r);
+  return m;
 }
