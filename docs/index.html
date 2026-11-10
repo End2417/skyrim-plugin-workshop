@@ -1,39 +1,170 @@
-Skyrim ESP Editor
-Source on GitHub
-Edit Skyrim plugins on your phone
-Open a .esp or .esm, change a record, and save just that change as its own small mod. Nothing leaves your device.
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skyrim ESP Editor for Android</title>
+<meta name="description" content="Open, edit and extract Skyrim plugin files on your phone. Change a sword’s damage, then save just that change as a small .esp mod.">
+<meta name="theme-color" content="#152846">
+<link rel="icon" href="https://raw.githubusercontent.com/End2417/skyrim-plugin-workshop/main/public/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --night: #0e1a2e;
+    --deep: #152846;
+    --slate: #1f3556;
+    --frost: #9fd6ea;
+    --snow: #eef4f8;
+    --mist: #a9b8ca;
+    --ember: #e8a24a;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--night);
+    color: var(--snow);
+    font: 400 1.0625rem/1.65 "IBM Plex Sans", system-ui, sans-serif;
+  }
+  a { color: var(--frost); }
+  a:focus-visible, .btn:focus-visible { outline: 3px solid var(--ember); outline-offset: 3px; }
+  .wrap { width: min(68rem, 100% - 2.5rem); margin-inline: auto; }
 
-Download for Android
-How to install
-Free. Android 6 or newer. The download is an APK file.
+  header.top { padding: 1.25rem 0; }
+  header.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .brand { font-family: "Cinzel", serif; font-weight: 600; letter-spacing: .04em; color: var(--snow); text-decoration: none; }
 
-IronSword
-WEAP:00012EB7
-Value
-25
-Damage
-712
-Weight
-9.0
-Skyrim_Changes.esp
-1 record · master: Skyrim.esm
+  .hero { padding: clamp(2.5rem, 7vw, 5.5rem) 0 clamp(3rem, 7vw, 5rem); background: linear-gradient(180deg, var(--deep), var(--night)); }
+  .hero .wrap { display: grid; gap: 3rem; grid-template-columns: 1fr; align-items: center; }
+  @media (min-width: 60rem) { .hero .wrap { grid-template-columns: 1.05fr .95fr; } }
+  h1 {
+    font-family: "Cinzel", serif; font-weight: 600;
+    font-size: clamp(2.2rem, 6vw, 3.8rem); line-height: 1.1; margin: 0 0 1.25rem;
+  }
+  .lede { max-width: 34rem; color: var(--mist); margin: 0 0 2rem; font-size: 1.15rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+  .btn {
+    display: inline-block; padding: .8rem 1.4rem; border-radius: 6px; text-decoration: none;
+    font-weight: 600; border: 1px solid var(--frost);
+  }
+  .btn.primary { background: var(--frost); color: var(--night); }
+  .btn.primary:hover { background: #b9e4f2; }
+  .btn.ghost { color: var(--frost); }
+  .btn.ghost:hover { background: rgba(159,214,234,.1); }
+  .small { color: var(--mist); font-size: .9rem; margin-top: 1rem; }
 
-What it does
-Edit any plugin
-Browse every record in a .esp or .esm, search by FormID or Editor ID, and change values in readable fields instead of raw bytes. Records you don’t touch save byte-for-byte identical.
+  /* The one memorable element: the edit-then-extract flow, drawn as the app shows it. */
+  .flow { font-family: "IBM Plex Mono", monospace; font-size: .9rem; }
+  .rec { background: var(--deep); border: 1px solid var(--slate); border-radius: 8px; overflow: hidden; }
+  .rec-head { padding: .7rem 1rem; background: var(--slate); color: var(--snow); display: flex; justify-content: space-between; gap: 1rem; }
+  .row { display: flex; justify-content: space-between; gap: 1rem; padding: .6rem 1rem; border-top: 1px solid var(--slate); color: var(--mist); }
+  .row b { font-weight: 500; color: var(--snow); }
+  .row.edited { background: rgba(232,162,74,.12); }
+  .row.edited b { color: var(--ember); }
+  .row s { color: var(--mist); margin-right: .5rem; }
+  .pipe { margin: 0 auto; width: 2px; height: 2.2rem; background: linear-gradient(var(--slate), var(--frost)); }
+  .out { border: 1px dashed var(--frost); border-radius: 8px; padding: 1rem; background: rgba(159,214,234,.06); }
+  .out strong { color: var(--frost); font-weight: 500; }
+  .out p { margin: .35rem 0 0; color: var(--mist); }
 
-Extract only your change
-Edited a sword in Skyrim.esm? Pick it and save it alone as a new .esp that overrides the original. Your edit becomes a mod, and Skyrim.esm stays untouched.
+  section { padding: clamp(2.5rem, 6vw, 4.5rem) 0; }
+  h2 { font-family: "Cinzel", serif; font-weight: 600; font-size: clamp(1.5rem, 3.5vw, 2.1rem); margin: 0 0 1.5rem; }
+  .features { display: grid; gap: 2rem; grid-template-columns: 1fr; }
+  @media (min-width: 52rem) { .features { grid-template-columns: repeat(3, 1fr); gap: 2.5rem; } }
+  .features h3 { margin: 0 0 .5rem; font-size: 1.1rem; color: var(--frost); }
+  .features p { margin: 0; color: var(--mist); }
 
-Private and offline
-Files are opened and saved on your phone. The app needs no account and never uploads your files. Saved plugins go to Documents/ESP Editor.
+  .install { background: var(--deep); }
+  .install ol { margin: 0; padding-left: 1.4rem; max-width: 40rem; }
+  .install li { margin-bottom: .9rem; padding-left: .3rem; }
+  .install li::marker { color: var(--frost); font-weight: 600; }
+  code { font-family: "IBM Plex Mono", monospace; font-size: .92em; background: var(--night); padding: .1em .4em; border-radius: 4px; }
 
-Install on Android
-Open the latest release on your phone and download ESP-Editor.apk.
-Open the downloaded file. If Android asks, allow your browser or Files app to install unknown apps.
-Tap Install, then open ESP Editor.
-Tap Open and choose a plugin. Make your edits, then use Save for the whole file or Extract for just your changes.
-Find saved files in your Files app under Documents/ESP Editor, then copy them into Skyrim’s Data folder.
-An unofficial fan tool. It is not made by or affiliated with Bethesda Softworks. The Elder Scrolls and Skyrim are trademarks of their owners.
+  footer { padding: 2.5rem 0 3rem; color: var(--mist); font-size: .9rem; }
+  footer p { margin: 0 0 .5rem; max-width: 42rem; }
+</style>
+</head>
+<body>
 
-Always back up your plugins before editing, and test extracted files in your game or in xEdit before sharing them.
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#">Skyrim ESP Editor</a>
+    <a href="https://github.com/End2417/skyrim-plugin-workshop">Source on GitHub</a>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <div>
+        <h1>Edit Skyrim plugins on your phone</h1>
+        <p class="lede">Open a .esp or .esm, change a record, and save just that change as its own small mod. Nothing leaves your device.</p>
+        <div class="actions">
+          <a class="btn primary" href="https://github.com/End2417/skyrim-plugin-workshop/releases/latest">Download for Android</a>
+          <a class="btn ghost" href="#install">How to install</a>
+        </div>
+        <p class="small">Free. Android 6 or newer. The download is an APK file.</p>
+      </div>
+
+      <div class="flow" role="img" aria-label="Example: the Damage field of IronSword changed from 7 to 12, then extracted into Skyrim_Changes.esp, a file with one record and Skyrim.esm as its master.">
+        <div class="rec">
+          <div class="rec-head"><span>IronSword</span><span>WEAP:00012EB7</span></div>
+          <div class="row"><span>Value</span><b>25</b></div>
+          <div class="row edited"><span>Damage</span><b><s>7</s>12</b></div>
+          <div class="row"><span>Weight</span><b>9.0</b></div>
+        </div>
+        <div class="pipe"></div>
+        <div class="out">
+          <strong>Skyrim_Changes.esp</strong>
+          <p>1 record · master: Skyrim.esm</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <div class="wrap">
+      <h2>What it does</h2>
+      <div class="features">
+        <div>
+          <h3>Edit any plugin</h3>
+          <p>Browse every record in a .esp or .esm, search by FormID or Editor ID, and change values in readable fields instead of raw bytes. Records you don’t touch save byte-for-byte identical.</p>
+        </div>
+        <div>
+          <h3>Extract only your change</h3>
+          <p>Edited a sword in Skyrim.esm? Pick it and save it alone as a new .esp that overrides the original. Your edit becomes a mod, and Skyrim.esm stays untouched.</p>
+        </div>
+        <div>
+          <h3>Private and offline</h3>
+          <p>Files are opened and saved on your phone. The app needs no account and never uploads your files. Saved plugins go to Documents/ESP Editor.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="install" id="install">
+    <div class="wrap">
+      <h2>Install on Android</h2>
+      <ol>
+        <li>Open the <a href="https://github.com/End2417/skyrim-plugin-workshop/releases/latest">latest release</a> on your phone and download <code>ESP-Editor.apk</code>.</li>
+        <li>Open the downloaded file. If Android asks, allow your browser or Files app to install unknown apps.</li>
+        <li>Tap <b>Install</b>, then open <b>ESP Editor</b>.</li>
+        <li>Tap <b>Open</b> and choose a plugin. Make your edits, then use <b>Save</b> for the whole file or <b>Extract</b> for just your changes.</li>
+        <li>Find saved files in your Files app under <code>Documents/ESP Editor</code>, then copy them into Skyrim’s Data folder.</li>
+      </ol>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>An unofficial fan tool. It is not made by or affiliated with Bethesda Softworks. The Elder Scrolls and Skyrim are trademarks of their owners.</p>
+    <p>Always back up your plugins before editing, and test extracted files in your game or in xEdit before sharing them.</p>
+  </div>
+</footer>
+
+</body>
+</html>
