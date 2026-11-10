@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { shouldRegisterServiceWorker } from "./guard";
 
-const base = { prod: true, inIframe: false, hostname: "skyrim-plugin-workshop.lovable.app", search: "" };
+const base = {
+  prod: true,
+  inIframe: false,
+  hostname: "skyrim-plugin-workshop.lovable.app",
+  search: "",
+};
 
 describe("shouldRegisterServiceWorker", () => {
   it("registers on the published site", () => {
@@ -31,6 +36,8 @@ describe("shouldRegisterServiceWorker", () => {
     expect(shouldRegisterServiceWorker({ ...base, hostname })).toBe(false);
   });
   it("does not treat preview-looking labels on other domains as previews", () => {
-    expect(shouldRegisterServiceWorker({ ...base, hostname: "preview-v2--shop.example.com" })).toBe(true);
+    expect(shouldRegisterServiceWorker({ ...base, hostname: "preview-v2--shop.example.com" })).toBe(
+      true,
+    );
   });
 });
