@@ -1,0 +1,71 @@
+name: Build Android
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+
+      - name: Install
+        run: bun install
+
+      - name: Build static web app
+        run: bun run build:android
+
+      - name: Locate built index.html
+        run: |
+          IDX=$(find dist .output -name index.html -not -path "*/node_modules/*" 2>/dev/null | head -1)
+          if [ -z "$IDX" ]; then echo "No index.html produced. Build output:"; find dist .output -maxdepth 3 | head -50; exit 1; fi
+          echo "CAP_WEB_DIR=$(dirname "$IDX")" >> "$GITHUB_ENV"
+          echo "Using $(dirname "$IDX")"
+
+      - name: Create Android project
+        run: |
+          [ -d android ] || npx cap add android
+          # Launcher icon from the app's own maskable icon
+          RES=android/app/src/main/res
+          rm -rf $RES/mipmap-anydpi-v26
+          for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            convert public/icons/icon-maskable-512.png -resize ${d#*:}x${d#*:} $RES/mipmap-${d%:*}/ic_launcher.png
+            cp $RES/mipmap-${d%:*}/ic_launcher.png $RES/mipmap-${d%:*}/ic_launcher_round.png
+            cp $RES/mipmap-${d%:*}/ic_launcher.png $RES/mipmap-${d%:*}/ic_launcher_foreground.png
+          done
+          npx cap sync android
+          # Must be higher than the old TWA release on Play
+          sed -i "s/versionCode [0-9]*/versionCode ${{ github.run_number }}0/" android/app/build.gradle
+
+      - name: Build release (unsigned)
+        working-directory: android
+        run: ./gradlew assembleRelease bundleRelease
+
+      - name: Sign
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          echo "$KS_B64" | base64 -d > signing.keystore
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          OUT=android/app/build/outputs
+          mkdir -p dist-out
+          $BT/zipalign -p 4 $OUT/apk/release/app-release-unsigned.apk aligned.apk
+          $BT/apksigner sign --ks signing.keystore --ks-key-alias "$KS_ALIAS" \
+            --ks-pass env:KS_PASS --key-pass env:KS_PASS \
+            --out dist-out/ESP-Editor.apk aligned.apk
+          jarsigner -keystore signing.keystore -storepass "$KS_PASS" -keypass "$KS_PASS" \
+            -sigalg SHA256withRSA -digestalg SHA-256 \
+            -signedjar dist-out/ESP-Editor.aab $OUT/bundle/release/app-release.aab "$KS_ALIAS"
+          rm signing.keystore
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ESP-Editor-android
+          path: dist-out/
