@@ -69,9 +69,7 @@ export function RecordView({ file, record, ctx, onChange, onDeleted }: Props) {
   };
   const tryMutate = (fn: () => void) => {
     try {
-      const before = record.subrecords?.map((s) => s.data);
       mutate(fn);
-      void before;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

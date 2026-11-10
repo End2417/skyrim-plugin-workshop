@@ -34,6 +34,7 @@
   --color-ring-offset-background: var(--background);
   --color-selected: var(--selected);
   --color-modified: var(--modified);
+  --color-warning: var(--warning);
 }
 
 /* Dark, frost-and-iron palette with a dull gold accent. */
@@ -60,6 +61,7 @@
   --ring: oklch(0.76 0.12 80);
   --selected: oklch(0.76 0.12 80 / 18%);
   --modified: oklch(0.78 0.14 150);
+  --warning: oklch(0.8 0.14 70);
 }
 
 @layer base {

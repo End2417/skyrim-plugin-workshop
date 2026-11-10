@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { describeGroup, getEditorId, hex8, type EspNode, type EspRecord } from "@/lib/esp/format";
+import { describeGroup, getDisplayName, getEditorId, hex8, type EspNode, type EspRecord } from "@/lib/esp/format";
 
 const PAGE = 200;
 
@@ -10,14 +10,47 @@ interface Props {
   depth: number;
   expanded: Set<number>;
   selected: EspRecord | null;
+  localized: boolean;
   onToggle: (uid: number) => void;
   onSelect: (r: EspRecord) => void;
 }
 
+/** Grid shared by the tree header and rows: FormID | EditorID | Name, like TES5Edit. */
+export const TREE_COLS = "grid grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)] gap-2";
+
+export function RecordRow({
+  record,
+  depth,
+  selected,
+  localized,
+  onSelect,
+}: {
+  record: EspRecord;
+  depth: number;
+  selected: boolean;
+  localized: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      onClick={onSelect}
+      className={cn(TREE_COLS, "w-full py-0.5 pr-2 text-left font-mono text-xs hover:bg-accent", selected && "bg-selected")}
+    >
+      <span className="truncate text-muted-foreground" style={{ paddingLeft: `${depth * 12 + 22}px` }}>
+        {record.type === "TES4" ? "File Header" : hex8(record.formId)}
+      </span>
+      <span className="truncate">{getEditorId(record)}</span>
+      <span className="truncate text-muted-foreground">
+        {record.dirty && <span className="mr-1 text-modified">●</span>}
+        {getDisplayName(record, localized)}
+      </span>
+    </button>
+  );
+}
+
 export function RecordTree(props: Props) {
-  const { nodes, depth, expanded, selected, onToggle, onSelect } = props;
+  const { nodes, depth, expanded, selected, localized, onToggle, onSelect } = props;
   const [limit, setLimit] = useState(PAGE);
-  const pad = { paddingLeft: `${depth * 14 + 8}px` };
 
   return (
     <>
@@ -26,38 +59,30 @@ export function RecordTree(props: Props) {
           <div key={n.uid}>
             <button
               onClick={() => onToggle(n.uid)}
-              style={pad}
-              className="flex w-full items-center gap-1 py-1 pr-2 text-left text-sm hover:bg-accent"
+              style={{ paddingLeft: `${depth * 12 + 6}px` }}
+              className="flex w-full items-center gap-1 py-0.5 pr-2 text-left text-sm hover:bg-accent"
             >
-              <ChevronRight
-                className={cn("size-3.5 shrink-0 transition-transform", expanded.has(n.uid) && "rotate-90")}
-              />
-              <span className="truncate font-medium">{describeGroup(n)}</span>
+              <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", expanded.has(n.uid) && "rotate-90")} />
+              <span className="truncate text-primary">{describeGroup(n)}</span>
               <span className="ml-auto font-mono text-xs text-muted-foreground">{n.children.length}</span>
             </button>
             {expanded.has(n.uid) && <RecordTree {...props} nodes={n.children} depth={depth + 1} />}
           </div>
         ) : (
-          <button
+          <RecordRow
             key={n.uid}
-            onClick={() => onSelect(n)}
-            style={{ paddingLeft: `${depth * 14 + 26}px` }}
-            className={cn(
-              "flex w-full gap-2 py-1 pr-2 text-left font-mono text-xs hover:bg-accent",
-              selected === n && "bg-selected",
-            )}
-          >
-            <span className="text-primary">{n.type}</span>
-            <span className="text-muted-foreground">{hex8(n.formId)}</span>
-            <span className="truncate">{getEditorId(n)}</span>
-            {n.dirty && <span className="ml-auto text-modified">●</span>}
-          </button>
+            record={n}
+            depth={depth}
+            selected={selected === n}
+            localized={localized}
+            onSelect={() => onSelect(n)}
+          />
         ),
       )}
       {nodes.length > limit && (
         <button
           onClick={() => setLimit(limit + PAGE)}
-          style={{ paddingLeft: `${depth * 14 + 26}px` }}
+          style={{ paddingLeft: `${depth * 12 + 22}px` }}
           className="w-full py-1 text-left text-xs text-primary hover:underline"
         >
           Show more ({(nodes.length - limit).toLocaleString()} left)
