@@ -92,7 +92,7 @@ export function EspEditor() {
       a.href = url;
       a.download = file.name;
       a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
       setModified(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -155,7 +155,7 @@ export function EspEditor() {
           <input
             ref={inputRef}
             type="file"
-            accept=".esp,.esm,.esl"
+            accept=".esp,.esm,.esl,application/octet-stream"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
