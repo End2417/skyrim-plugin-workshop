@@ -35,3 +35,4 @@ use the editor.
 - Records keep their original bytes until edited (`markDirty` before any mutation), so untouched records save byte-for-byte identical.
 - Field names/layouts per record type live in `src/lib/esp/defs.ts` (hand-written from TES5Edit's wbDefinitionsTES5.pas); `decode.ts` turns them into editable rows. Unknown subrecords must still fall back to raw text/hex so nothing becomes uneditable.
 - Browser download dispatch and delayed URL cleanup live in a UI-free helper; anchor clicks cannot confirm disk writes, so download feedback must not clear unsaved edits or claim completion.
+- Offline support uses vite-plugin-pwa (generateSW) writing `sw.js` into the client environment's outDir; `src/lib/pwa/register.ts` is the only registrar and `src/lib/pwa/guard.ts` blocks dev, iframes, Lovable preview hosts and `?sw=off`, so previews never serve stale cached code. Pages are NetworkFirst, never precached.
