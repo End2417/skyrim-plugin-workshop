@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState } from "react";
-import { Download, FolderOpen, X } from "lucide-react";
+import { AlertCircle, Download, FolderOpen, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DecodeContext } from "@/lib/esp/decode";
+import { downloadPlugin } from "@/lib/esp/download";
 import {
   buildFormIdIndex,
   countRecords,
@@ -28,6 +29,7 @@ export function EspEditor() {
   const [selected, setSelected] = useState<EspRecord | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [saveFeedback, setSaveFeedback] = useState<{ failed: boolean; filename: string; detail?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [modified, setModified] = useState(false);
   const [filterId, setFilterId] = useState("");
@@ -59,6 +61,7 @@ export function EspEditor() {
   };
 
   const changed = (opts?: { reindex?: boolean }) => {
+    setSaveFeedback(null);
     setModified(true);
     setRev((r) => r + 1);
     if (opts?.reindex) setIndexRev((r) => r + 1);
@@ -67,6 +70,7 @@ export function EspEditor() {
   async function openFile(f: File) {
     setLoading(true);
     setError(null);
+    setSaveFeedback(null);
     try {
       const parsed = parseEsp(new Uint8Array(await f.arrayBuffer()), f.name);
       setFile(parsed);
@@ -85,17 +89,15 @@ export function EspEditor() {
 
   function save() {
     if (!file) return;
+    setSaveFeedback(null);
     try {
       const bytes = serializeEsp(file);
-      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/octet-stream" }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = file.name;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-      setModified(false);
+      downloadPlugin(bytes, file.name);
+      setSaveFeedback({ failed: false, filename: file.name });
+      // A dispatched click is not proof that the file was saved. Keep edits
+      // marked unsaved until a confirmed save mechanism is available.
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setSaveFeedback({ failed: true, filename: file.name, detail: e instanceof Error ? e.message : String(e) });
     }
   }
 
@@ -171,6 +173,29 @@ export function EspEditor() {
           </Button>
         </div>
       </header>
+
+      {saveFeedback && (
+        <div
+          role={saveFeedback.failed ? "alert" : "status"}
+          className={`flex items-start gap-2 border-b px-4 py-3 text-sm ${saveFeedback.failed ? "border-destructive bg-destructive/15" : "bg-muted"}`}
+        >
+          {saveFeedback.failed ? <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" /> : <Download className="mt-0.5 size-4 shrink-0 text-primary" />}
+          <div className="min-w-0 flex-1 break-words">
+            <p className="font-medium">{saveFeedback.failed ? "Download failed" : "Download requested"} — {saveFeedback.filename}</p>
+            <p className="mt-1 text-muted-foreground">
+              {saveFeedback.failed
+                ? `The download could not be started. Your edits are still here. ${saveFeedback.detail ?? ""}`
+                : "Check your browser’s Downloads or Android download notification to confirm it completed. This browser cannot confirm that the file reached your device; your edits are still here."}
+            </p>
+            <Button variant="secondary" size="sm" className="mt-2" onClick={save}>
+              <Download /> Try download again
+            </Button>
+          </div>
+          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setSaveFeedback(null)} aria-label="Dismiss download status">
+            <X className="size-4" />
+          </Button>
+        </div>
+      )}
 
       {file && (
         <div className="truncate border-b bg-muted px-4 py-1 font-mono text-xs text-muted-foreground" title={breadcrumb.join(" \\ ")}>
