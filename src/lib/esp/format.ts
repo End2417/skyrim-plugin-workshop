@@ -34,7 +34,7 @@ export interface EspRecord {
   subrecords: Subrecord[] | null;
   dirty: boolean;
   parent: EspGroup | null;
-  editorIdCache?: string | null;
+  editorIdCache?: string | null | undefined;
 }
 
 export interface EspGroup {
@@ -59,7 +59,7 @@ let uidCounter = 0;
 export const nextUid = () => ++uidCounter;
 
 const sig = (b: Uint8Array, o: number) =>
-  String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+  String.fromCharCode(b[o]!, b[o + 1]!, b[o + 2]!, b[o + 3]!);
 
 const view = (b: Uint8Array) => new DataView(b.buffer, b.byteOffset, b.byteLength);
 
@@ -276,7 +276,7 @@ const CP1252_REVERSE = new Map(CP1252_HIGH.map((cp, i) => [cp, 0x80 + i]));
 
 export function decodeText(b: Uint8Array): string {
   let s = "";
-  for (const c of b) s += String.fromCharCode(c >= 0x80 && c < 0xa0 ? CP1252_HIGH[c - 0x80] : c);
+  for (const c of b) s += String.fromCharCode(c >= 0x80 && c < 0xa0 ? CP1252_HIGH[c - 0x80]! : c);
   return s;
 }
 
@@ -300,7 +300,7 @@ export const encodeZString = (s: string) => {
 export function looksLikeZString(d: Uint8Array): boolean {
   if (d.length < 2 || d[d.length - 1] !== 0) return false;
   for (let i = 0; i < d.length - 1; i++) {
-    const c = d[i];
+    const c = d[i]!;
     if (c < 0x20 && c !== 9 && c !== 10 && c !== 13) return false;
   }
   return true;

@@ -10,6 +10,8 @@ import {
   parseEsp,
   serializeEsp,
   serializeSubrecords,
+  type EspFile,
+  type EspGroup,
   type EspRecord,
 } from "./format";
 
@@ -66,6 +68,8 @@ function samplePlugin() {
   return concat([tes4, group("WEAP", [weap]), group("NPC_", [npc])]);
 }
 
+const firstIn = (f: EspFile, i: number) => (f.nodes[i] as EspGroup).children[0] as EspRecord;
+
 describe("Skyrim plugin format", () => {
   it("saves an unedited plugin byte-for-byte identical", () => {
     const bytes = samplePlugin();
@@ -74,7 +78,7 @@ describe("Skyrim plugin format", () => {
 
   it("reads subrecords larger than 65535 bytes", () => {
     const file = parseEsp(samplePlugin());
-    const weap = (file.nodes[1] as { children: EspRecord[] }).children[0];
+    const weap = firstIn(file, 1);
     expect(getSubrecords(weap).map((s) => [s.type, s.data.length])).toEqual([
       ["EDID", 10],
       ["MODL", 70000],
@@ -83,21 +87,21 @@ describe("Skyrim plugin format", () => {
 
   it("keeps edits to a compressed record after saving and reopening", () => {
     const file = parseEsp(samplePlugin());
-    const npc = (file.nodes[2] as { children: EspRecord[] }).children[0];
+    const npc = firstIn(file, 2);
     expect(getEditorId(npc)).toBe("Bandit");
     markDirty(npc);
-    getSubrecords(npc)[0].data = encodeZString("BanditChief");
+    getSubrecords(npc)[0]!.data = encodeZString("BanditChief");
     const reopened = parseEsp(serializeEsp(file));
-    const npc2 = (reopened.nodes[2] as { children: EspRecord[] }).children[0];
+    const npc2 = firstIn(reopened, 2);
     expect(npc2.flags & FLAG_COMPRESSED).toBe(FLAG_COMPRESSED);
     expect(getEditorId(npc2)).toBe("BanditChief");
   });
 
   it("lowers the header's record count by one when a record is deleted", () => {
     const file = parseEsp(samplePlugin());
-    deleteRecord(file, (file.nodes[1] as { children: EspRecord[] }).children[0]);
+    deleteRecord(file, firstIn(file, 1));
     const reopened = parseEsp(serializeEsp(file));
-    const hedr = getSubrecords(reopened.nodes[0] as EspRecord)[0].data;
+    const hedr = getSubrecords(reopened.nodes[0] as EspRecord)[0]!.data;
     expect(new DataView(hedr.buffer).getInt32(4, true)).toBe(3);
   });
 });

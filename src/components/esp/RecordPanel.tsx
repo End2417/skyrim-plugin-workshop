@@ -96,14 +96,14 @@ export function RecordPanel({ file, record, onChange, onDeleted }: Props) {
                     <IconBtn
                       label="Move up"
                       disabled={i === 0}
-                      onClick={() => mutate(() => ([subs[i - 1], subs[i]] = [subs[i], subs[i - 1]]))}
+                      onClick={() => mutate(() => subs.splice(i - 1, 2, subs[i]!, subs[i - 1]!))}
                     >
                       <ArrowUp />
                     </IconBtn>
                     <IconBtn
                       label="Move down"
                       disabled={i === subs.length - 1}
-                      onClick={() => mutate(() => ([subs[i + 1], subs[i]] = [subs[i], subs[i + 1]]))}
+                      onClick={() => mutate(() => subs.splice(i, 2, subs[i + 1]!, subs[i]!))}
                     >
                       <ArrowDown />
                     </IconBtn>
