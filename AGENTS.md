@@ -28,3 +28,8 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+
+## Project rules
+
+- Plugin parsing/serialization lives in `src/lib/esp/format.ts` and runs entirely in the browser; keep it UI-free so it stays testable.
+- Records keep their original bytes until edited (`markDirty` before any mutation), so untouched records save byte-for-byte identical.
