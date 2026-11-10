@@ -1,6 +1,7 @@
 // Skyrim (TES5) plugin binary format: parsing and serialization.
 // Records keep their original bytes until edited, so untouched records round-trip byte-for-byte.
 import { unzlibSync, zlibSync } from "fflate";
+import { SIGNATURE_NAMES } from "./defs";
 
 export const FLAG_COMPRESSED = 0x00040000;
 export const HEADER_SIZE = 24;
@@ -35,6 +36,7 @@ export interface EspRecord {
   dirty: boolean;
   parent: EspGroup | null;
   editorIdCache?: string | null | undefined;
+  nameCache?: string | null | undefined;
 }
 
 export interface EspGroup {
@@ -174,6 +176,7 @@ export function markDirty(r: EspRecord) {
   getSubrecords(r);
   r.dirty = true;
   r.editorIdCache = undefined;
+  r.nameCache = undefined;
 }
 
 export function serializeSubrecords(subs: Subrecord[]): Uint8Array {
@@ -345,32 +348,25 @@ export function getEditorId(r: EspRecord): string | null {
   return result;
 }
 
-const GROUP_TYPE_NAMES: Record<number, string> = {
-  1: "World children",
-  2: "Interior cell block",
-  3: "Interior cell sub-block",
-  4: "Exterior cell block",
-  5: "Exterior cell sub-block",
-  6: "Cell children",
-  7: "Topic children",
-  8: "Persistent children",
-  9: "Temporary children",
-  10: "Distant children",
-};
-
+/** Group label as TES5Edit shows it in the tree. */
 export function describeGroup(g: EspGroup): string {
   const dv = view(g.label);
   switch (g.groupType) {
-    case 0:
-      return sig(g.label, 0);
-    case 2:
-    case 3:
-      return `${GROUP_TYPE_NAMES[g.groupType]} ${dv.getInt32(0, true)}`;
-    case 4:
-    case 5:
-      return `${GROUP_TYPE_NAMES[g.groupType]} (${dv.getInt16(2, true)}, ${dv.getInt16(0, true)})`;
-    default:
-      return `${GROUP_TYPE_NAMES[g.groupType] ?? `Group type ${g.groupType}`} of ${hex8(dv.getUint32(0, true))}`;
+    case 0: {
+      const s = sig(g.label, 0);
+      return SIGNATURE_NAMES[s] ?? s;
+    }
+    case 1: return `World Children of ${hex8(dv.getUint32(0, true))}`;
+    case 2: return `Block ${dv.getInt32(0, true)}`;
+    case 3: return `Sub-Block ${dv.getInt32(0, true)}`;
+    case 4: return `Block ${dv.getInt16(2, true)}, ${dv.getInt16(0, true)}`;
+    case 5: return `Sub-Block ${dv.getInt16(2, true)}, ${dv.getInt16(0, true)}`;
+    case 6: return `Cell Children of ${hex8(dv.getUint32(0, true))}`;
+    case 7: return `Topic Children of ${hex8(dv.getUint32(0, true))}`;
+    case 8: return "Persistent";
+    case 9: return "Temporary";
+    case 10: return "Visible When Distant";
+    default: return `Group type ${g.groupType}`;
   }
 }
 
@@ -417,4 +413,56 @@ export function deleteRecord(file: EspFile, r: EspRecord) {
       dv.setInt32(4, Math.max(0, dv.getInt32(4, true) - 1), true);
     }
   }
+}
+
+/** Data of the first subrecord with this signature, without fully parsing the record. */
+export function peekSubrecord(r: EspRecord, type: string): Uint8Array | null {
+  if (r.subrecords) return r.subrecords.find((s) => s.type === type)?.data ?? null;
+  const d = decodeRaw(r);
+  const dv = view(d);
+  let o = 0;
+  let pending: number | null = null;
+  while (o + 6 <= d.length) {
+    const t = sig(d, o);
+    let size = dv.getUint16(o + 4, true);
+    o += 6;
+    if (pending !== null) (size = pending), (pending = null);
+    if (t === "XXXX" && size === 4) {
+      pending = dv.getUint32(o, true);
+    } else if (t === type) {
+      return d.subarray(o, o + size);
+    }
+    o += size;
+  }
+  return null;
+}
+
+/** The record's in-game name (FULL), or null when missing or stored in a strings file. */
+export function getDisplayName(r: EspRecord, localized: boolean): string | null {
+  if (r.nameCache !== undefined) return r.nameCache;
+  let result: string | null = null;
+  if (!localized) {
+    try {
+      const d = peekSubrecord(r, "FULL");
+      result = d ? zstringValue(d) : null;
+    } catch {
+      result = null;
+    }
+  }
+  r.nameCache = result;
+  return result;
+}
+
+export function fileInfo(file: EspFile): { localized: boolean; masters: string[] } {
+  const tes4 = file.nodes[0] as EspRecord;
+  const masters = getSubrecords(tes4)
+    .filter((s) => s.type === "MAST")
+    .map((s) => zstringValue(s.data));
+  return { localized: (tes4.flags & 0x80) !== 0, masters };
+}
+
+export function buildFormIdIndex(file: EspFile): Map<number, EspRecord> {
+  const m = new Map<number, EspRecord>();
+  for (const r of walkRecords(file.nodes)) if (r.type !== "TES4") m.set(r.formId >>> 0, r);
+  return m;
 }
