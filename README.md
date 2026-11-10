@@ -17,13 +17,15 @@ Open, edit and extract Skyrim Legendary Edition `.esp` / `.esm` plugin files on 
 2. Open it and allow installs from your browser or Files app if Android asks.
 3. Saved plugins go to `Documents/ESP Editor`.
 
-Always back up your plugins before editing, and test extracted files in xEdit or in the game before sharing them.
+## AI disclaimer
 
-This is an unofficial fan tool, not affiliated with Bethesda Softworks.
+This project was created with the help of AI tools, including Lovable and Claude by Anthropic. AI wrote much of the code, and it has not been fully reviewed or tested. It may contain bugs, and edited or extracted plugins may not behave as expected.
 
-## Build with Lovable
+- Back up your plugins before editing them.
+- Test extracted or edited files in xEdit or in the game before sharing or relying on them.
+- The software is provided as is, without warranty of any kind.
 
-Continue developing this project in the Lovable editor. Every change made in Lovable is committed to this repository, and changes pushed to `main` sync back into Lovable.
+This is an unofficial fan tool and is not affiliated with Bethesda Softworks.
 
 ## Development
 
@@ -31,9 +33,4 @@ You need Node.js and npm.
 
 ```sh
 git clone https://github.com/End2417/skyrim-plugin-workshop
-cd skyrim-plugin-workshop
-npm i
-npm run dev
-```
-
-The Android app is built by the **Build Android** workflow in the Actions tab. It needs the secrets `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD` and `KEY_ALIAS`.
+cd
