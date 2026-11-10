@@ -61,7 +61,7 @@ function pwaClientOutDir(): Plugin {
     name: "pwa-client-outdir",
     enforce: "pre",
     configResolved(config) {
-      const clientOut = config.environments?.client?.build?.outDir;
+      const clientOut = config.environments?.["client"]?.build?.outDir;
       if (clientOut) pwaOptions.outDir = clientOut;
     },
   };
