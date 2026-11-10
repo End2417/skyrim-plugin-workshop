@@ -8,7 +8,8 @@
 // hosting already compresses at the edge.
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
-import { VitePWA } from "vite-plugin-pwa";
+import type { Plugin } from "vite";
+import { VitePWA, type VitePWAOptions } from "vite-plugin-pwa";
 
 export default defineConfig({
   tanstackStart: {
@@ -16,8 +17,23 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
-  plugins: [
-    VitePWA({
+  plugins: [pwaClientOutDir(), VitePWA(pwaOptions)],
+});
+
+// TanStack Start writes browser files to the client environment's own folder
+// (not build.outDir), so the service worker must be generated there too.
+function pwaClientOutDir(): Plugin {
+  return {
+    name: "pwa-client-outdir",
+    enforce: "pre",
+    configResolved(config) {
+      const clientOut = config.environments?.client?.build?.outDir;
+      if (clientOut) pwaOptions.outDir = clientOut;
+    },
+  };
+}
+
+const pwaOptions: Partial<VitePWAOptions> = {
       strategies: "generateSW",
       filename: "sw.js",
       registerType: "autoUpdate",
@@ -58,6 +74,4 @@ export default defineConfig({
           },
         ],
       },
-    }),
-  ],
-});
+};
