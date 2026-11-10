@@ -11,14 +11,48 @@ import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 import type { Plugin } from "vite";
 import { VitePWA, type VitePWAOptions } from "vite-plugin-pwa";
 
-export default defineConfig({
-  tanstackStart: {
-    // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
-    // nitro/vite builds from this
-    server: { entry: "server" },
-  },
-  plugins: [pwaClientOutDir(), VitePWA(pwaOptions)],
-});
+const pwaOptions: Partial<VitePWAOptions> = {
+    strategies: "generateSW",
+    filename: "sw.js",
+    registerType: "autoUpdate",
+    // src/lib/pwa/register.ts is the only registrar; the plugin must not inject one.
+    injectRegister: null,
+    devOptions: { enabled: false },
+    // The manifest is a static file in public/.
+    manifest: false,
+    workbox: {
+      // Hashed build assets and icons are precached; HTML is never precached.
+      globPatterns: ["**/*.{js,css,png,ico,svg,woff2,webmanifest}"],
+      navigateFallback: null,
+      cleanupOutdatedCaches: true,
+      clientsClaim: true,
+      skipWaiting: true,
+      runtimeCaching: [
+        {
+          // Pages: always try the network first, fall back to the last copy offline.
+          urlPattern: ({ request, url }) =>
+            request.mode === "navigate" && !url.pathname.startsWith("/~oauth"),
+          handler: "NetworkFirst",
+          options: {
+            cacheName: "pages",
+            networkTimeoutSeconds: 4,
+            expiration: { maxEntries: 20 },
+          },
+        },
+        {
+          urlPattern: ({ url }) =>
+            url.origin === "https://fonts.googleapis.com" ||
+            url.origin === "https://fonts.gstatic.com",
+          handler: "StaleWhileRevalidate",
+          options: {
+            cacheName: "google-fonts",
+            expiration: { maxEntries: 30 },
+            cacheableResponse: { statuses: [0, 200] },
+          },
+        },
+      ],
+    },
+};
 
 // TanStack Start writes browser files to the client environment's own folder
 // (not build.outDir), so the service worker must be generated there too.
@@ -33,45 +67,11 @@ function pwaClientOutDir(): Plugin {
   };
 }
 
-const pwaOptions: Partial<VitePWAOptions> = {
-      strategies: "generateSW",
-      filename: "sw.js",
-      registerType: "autoUpdate",
-      // src/lib/pwa/register.ts is the only registrar; the plugin must not inject one.
-      injectRegister: null,
-      devOptions: { enabled: false },
-      // The manifest is a static file in public/.
-      manifest: false,
-      workbox: {
-        // Hashed build assets and icons are precached; HTML is never precached.
-        globPatterns: ["**/*.{js,css,png,ico,svg,woff2,webmanifest}"],
-        navigateFallback: null,
-        cleanupOutdatedCaches: true,
-        clientsClaim: true,
-        skipWaiting: true,
-        runtimeCaching: [
-          {
-            // Pages: always try the network first, fall back to the last copy offline.
-            urlPattern: ({ request, url }) =>
-              request.mode === "navigate" && !url.pathname.startsWith("/~oauth"),
-            handler: "NetworkFirst",
-            options: {
-              cacheName: "pages",
-              networkTimeoutSeconds: 4,
-              expiration: { maxEntries: 20 },
-            },
-          },
-          {
-            urlPattern: ({ url }) =>
-              url.origin === "https://fonts.googleapis.com" ||
-              url.origin === "https://fonts.gstatic.com",
-            handler: "StaleWhileRevalidate",
-            options: {
-              cacheName: "google-fonts",
-              expiration: { maxEntries: 30 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
-      },
-};
+export default defineConfig({
+  tanstackStart: {
+    // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
+    // nitro/vite builds from this
+    server: { entry: "server" },
+  },
+  plugins: [pwaClientOutDir(), VitePWA(pwaOptions)],
+});
