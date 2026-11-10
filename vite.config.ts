@@ -8,6 +8,7 @@
 // hosting already compresses at the edge.
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
   tanstackStart: {
@@ -15,4 +16,48 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  plugins: [
+    VitePWA({
+      strategies: "generateSW",
+      filename: "sw.js",
+      registerType: "autoUpdate",
+      // src/lib/pwa/register.ts is the only registrar; the plugin must not inject one.
+      injectRegister: null,
+      devOptions: { enabled: false },
+      // The manifest is a static file in public/.
+      manifest: false,
+      workbox: {
+        // Hashed build assets and icons are precached; HTML is never precached.
+        globPatterns: ["**/*.{js,css,png,ico,svg,woff2,webmanifest}"],
+        navigateFallback: null,
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
+        runtimeCaching: [
+          {
+            // Pages: always try the network first, fall back to the last copy offline.
+            urlPattern: ({ request, url }) =>
+              request.mode === "navigate" && !url.pathname.startsWith("/~oauth"),
+            handler: "NetworkFirst",
+            options: {
+              cacheName: "pages",
+              networkTimeoutSeconds: 4,
+              expiration: { maxEntries: 20 },
+            },
+          },
+          {
+            urlPattern: ({ url }) =>
+              url.origin === "https://fonts.googleapis.com" ||
+              url.origin === "https://fonts.gstatic.com",
+            handler: "StaleWhileRevalidate",
+            options: {
+              cacheName: "google-fonts",
+              expiration: { maxEntries: 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
+      },
+    }),
+  ],
 });
