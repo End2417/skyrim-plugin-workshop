@@ -29,6 +29,7 @@ jobs:
 
       - name: Create Android project
         run: |
+          sudo apt-get update && sudo apt-get install -y imagemagick
           [ -d android ] || npx cap add android
           # Launcher icon from the app's own maskable icon
           RES=android/app/src/main/res
