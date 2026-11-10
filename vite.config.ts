@@ -67,11 +67,16 @@ function pwaClientOutDir(): Plugin {
   };
 }
 
+// `CAPACITOR_BUILD=1` (npm run build:android) builds a static single-page app with a real
+// index.html, which is what the Android wrapper bundles. The normal web build is unchanged.
+const nativeBuild = process.env.CAPACITOR_BUILD === "1";
+
 export default defineConfig({
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this
     server: { entry: "server" },
+    ...(nativeBuild ? { spa: { enabled: true, prerender: { outputPath: "/index.html" } } } : {}),
   },
   plugins: [pwaClientOutDir(), VitePWA(pwaOptions)],
 });

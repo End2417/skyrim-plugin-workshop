@@ -1,4 +1,5 @@
 // The only place the app registers its offline service worker.
+import { Capacitor } from "@capacitor/core";
 import { SW_URL, shouldRegisterServiceWorker } from "./guard";
 
 const PAGES_CACHE = "pages";
@@ -25,6 +26,12 @@ async function unregisterAppWorkers(): Promise<void> {
 
 export function setupServiceWorker(): void {
   if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+
+  // The Android app bundles its own files, so a service worker would only risk stale code.
+  if (Capacitor.isNativePlatform()) {
+    void unregisterAppWorkers().catch(() => {});
+    return;
+  }
 
   const allowed = shouldRegisterServiceWorker({
     prod: import.meta.env.PROD,

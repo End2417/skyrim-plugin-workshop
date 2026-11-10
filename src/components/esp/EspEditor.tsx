@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { AlertCircle, Download, FolderOpen, X } from "lucide-react";
+import { AlertCircle, Download, FolderOpen, PackageOpen, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DecodeContext } from "@/lib/esp/decode";
@@ -19,6 +19,7 @@ import {
   type EspGroup,
   type EspRecord,
 } from "@/lib/esp/format";
+import { ExtractDialog } from "./ExtractDialog";
 import { RecordRow, RecordTree, TREE_COLS } from "./RecordTree";
 import { RecordView } from "./RecordView";
 
@@ -31,6 +32,7 @@ export function EspEditor() {
   const [error, setError] = useState<string | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<{ failed: boolean; filename: string; detail?: string } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [extractOpen, setExtractOpen] = useState(false);
   const [modified, setModified] = useState(false);
   const [filterId, setFilterId] = useState("");
   const [filterEdid, setFilterEdid] = useState("");
@@ -87,12 +89,12 @@ export function EspEditor() {
     }
   }
 
-  function save() {
+  async function save() {
     if (!file) return;
     setSaveFeedback(null);
     try {
       const bytes = serializeEsp(file);
-      downloadPlugin(bytes, file.name);
+      await downloadPlugin(bytes, file.name);
       setSaveFeedback({ failed: false, filename: file.name });
       // A dispatched click is not proof that the file was saved. Keep edits
       // marked unsaved until a confirmed save mechanism is available.
@@ -167,6 +169,9 @@ export function EspEditor() {
           />
           <Button variant="secondary" size="sm" onClick={() => inputRef.current?.click()} disabled={loading}>
             <FolderOpen /> {loading ? "Opening…" : "Open"}
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => setExtractOpen(true)} disabled={!file} title="Save only the records you changed as a new plugin">
+            <PackageOpen /> Extract
           </Button>
           <Button size="sm" onClick={save} disabled={!file}>
             <Download /> Save
@@ -307,6 +312,7 @@ export function EspEditor() {
           </main>
         </div>
       )}
+      {file && <ExtractDialog open={extractOpen} onOpenChange={setExtractOpen} file={file} selected={selected} />}
     </div>
   );
 }
