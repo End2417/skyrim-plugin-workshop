@@ -1,26 +1,39 @@
 # Skyrim Plugin Workshop
 
-Make a simple web app capable of reading and editing Skyrim legendary edition's .esp files. No need to make anything fancy, it just need to work.
+Open, edit and extract Skyrim Legendary Edition `.esp` / `.esm` plugin files on your phone or in your browser. Change a record, such as a sword's damage, then save just that change as its own small `.esp` mod.
 
-This project was built with [Lovable](https://lovable.dev).
+**[Download the Android app](https://github.com/End2417/skyrim-plugin-workshop/releases/latest)** · **[Project website](https://end2417.github.io/skyrim-plugin-workshop/)** · **[Use in your browser](https://skyrim-plugin-workshop.lovable.app)**
 
-**Live app**: https://skyrim-plugin-workshop.lovable.app
+## Features
+
+- Browse every record in a plugin and search by FormID or Editor ID.
+- Edit values in readable fields instead of raw bytes. Records you don't touch save byte-for-byte identical.
+- **Extract** only the records you changed into a new `.esp` that overrides the originals and lists the source plugin as its master.
+- Works offline. Files stay on your device.
+
+## Install on Android
+
+1. Download `ESP-Editor.apk` from the [latest release](https://github.com/End2417/skyrim-plugin-workshop/releases/latest).
+2. Open it and allow installs from your browser or Files app if Android asks.
+3. Saved plugins go to `Documents/ESP Editor`.
+
+Always back up your plugins before editing, and test extracted files in xEdit or in the game before sharing them.
+
+This is an unofficial fan tool, not affiliated with Bethesda Softworks.
 
 ## Build with Lovable
 
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/1d1c59ce-40fd-46ba-b82d-bfe9b1c4487e).
-
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
+Continue developing this project in the Lovable editor. Every change made in Lovable is committed to this repository, and changes pushed to `main` sync back into Lovable.
 
 ## Development
 
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+You need Node.js and npm.
 
 ```sh
-git clone <this-repository-url>
-cd <repository-name>
+git clone https://github.com/End2417/skyrim-plugin-workshop
+cd skyrim-plugin-workshop
 npm i
 npm run dev
 ```
+
+The Android app is built by the **Build Android** workflow in the Actions tab. It needs the secrets `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD` and `KEY_ALIAS`.
