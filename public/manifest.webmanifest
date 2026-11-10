@@ -2,9 +2,9 @@
   "name": "Skyrim ESP Editor",
   "short_name": "ESP Editor",
   "description": "Open, inspect and edit Skyrim plugin files in your browser.",
-  "id": "/",
-  "start_url": "/",
-  "scope": "/",
+  "id": "/espeditor",
+  "start_url": "https://skyrim-plugin-workshop.lovable.app/",
+  "scope": "https://skyrim-plugin-workshop.lovable.app/",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#152846",
@@ -13,5 +13,8 @@
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
-  ]
+  ],
+  "dir": "auto",
+  "lang": "en",
+  "display_override": ["fullscreen", "window-controls-overlay"]
 }
