@@ -1,6 +1,7 @@
 // Skyrim (TES5) plugin binary format: parsing and serialization.
 // Records keep their original bytes until edited, so untouched records round-trip byte-for-byte.
 import { unzlibSync, zlibSync } from "fflate";
+import { SIGNATURE_NAMES } from "./defs";
 
 export const FLAG_COMPRESSED = 0x00040000;
 export const HEADER_SIZE = 24;
@@ -347,32 +348,25 @@ export function getEditorId(r: EspRecord): string | null {
   return result;
 }
 
-const GROUP_TYPE_NAMES: Record<number, string> = {
-  1: "World children",
-  2: "Interior cell block",
-  3: "Interior cell sub-block",
-  4: "Exterior cell block",
-  5: "Exterior cell sub-block",
-  6: "Cell children",
-  7: "Topic children",
-  8: "Persistent children",
-  9: "Temporary children",
-  10: "Distant children",
-};
-
+/** Group label as TES5Edit shows it in the tree. */
 export function describeGroup(g: EspGroup): string {
   const dv = view(g.label);
   switch (g.groupType) {
-    case 0:
-      return sig(g.label, 0);
-    case 2:
-    case 3:
-      return `${GROUP_TYPE_NAMES[g.groupType]} ${dv.getInt32(0, true)}`;
-    case 4:
-    case 5:
-      return `${GROUP_TYPE_NAMES[g.groupType]} (${dv.getInt16(2, true)}, ${dv.getInt16(0, true)})`;
-    default:
-      return `${GROUP_TYPE_NAMES[g.groupType] ?? `Group type ${g.groupType}`} of ${hex8(dv.getUint32(0, true))}`;
+    case 0: {
+      const s = sig(g.label, 0);
+      return SIGNATURE_NAMES[s] ?? s;
+    }
+    case 1: return `World Children of ${hex8(dv.getUint32(0, true))}`;
+    case 2: return `Block ${dv.getInt32(0, true)}`;
+    case 3: return `Sub-Block ${dv.getInt32(0, true)}`;
+    case 4: return `Block ${dv.getInt16(2, true)}, ${dv.getInt16(0, true)}`;
+    case 5: return `Sub-Block ${dv.getInt16(2, true)}, ${dv.getInt16(0, true)}`;
+    case 6: return `Cell Children of ${hex8(dv.getUint32(0, true))}`;
+    case 7: return `Topic Children of ${hex8(dv.getUint32(0, true))}`;
+    case 8: return "Persistent";
+    case 9: return "Temporary";
+    case 10: return "Visible When Distant";
+    default: return `Group type ${g.groupType}`;
   }
 }
 
