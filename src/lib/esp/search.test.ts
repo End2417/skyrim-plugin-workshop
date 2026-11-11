@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { encodeZString, getEditorId, parseEsp, serializeSubrecords, type EspFile } from "./format";
-import { parseQuery, searchPlugin, splitWords } from "./search";
+import { buildSearchIndex, parseQuery, searchIndex, searchPlugin, splitWords } from "./search";
 
 const sig = (s: string) => Array.from(s, (c) => c.charCodeAt(0));
 function record(type: string, formId: number, body: Uint8Array): Uint8Array {
@@ -80,6 +80,31 @@ describe("plain-language search", () => {
     expect(ids(searchPlugin(sample(), "misc")).sort()).toEqual(["ElbowGuardTest", "WoodenBowl"]);
     expect(ids(searchPlugin(sample(), "00000011"))).toEqual(["IronBow"]);
     expect(parseQuery("bad dead")[0]!.formId).toBeNull(); // plain words that happen to be hex stay words
+  });
+
+  it("gives the same answer through the background index, and can be cancelled", async () => {
+    const file = sample();
+    const index = (await buildSearchIndex(file, false))!;
+    expect(ids((await searchIndex(index, "bow"))!)).toEqual(ids(searchPlugin(file, "bow")));
+    expect(await searchIndex(index, "bow", 500, () => true)).toBeNull();
+  });
+
+  it("notices a record renamed after the index was built", async () => {
+    const file = sample();
+    const index = (await buildSearchIndex(file, false))!;
+    const sword = [...index.records].find((r) => getEditorId(r) === "IronSword")!;
+    sword.dirty = true;
+    sword.subrecords = [{ type: "EDID", data: encodeZString("IronLongbow") }];
+    sword.editorIdCache = undefined;
+    expect(ids((await searchIndex(index, "longbow"))!)).toContain("IronLongbow");
+  });
+
+  it("keeps only the best matches when there are many", () => {
+    expect(searchPlugin(sample(), "bow", 2)).toHaveLength(2);
+  });
+
+  it("ignores one-letter searches", () => {
+    expect(searchPlugin(sample(), "a")).toEqual([]);
   });
 
   it("returns nothing for an empty or unmatched search", () => {
