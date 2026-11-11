@@ -146,7 +146,7 @@ export function EspEditor() {
 
   return (
     <div className="flex min-h-screen flex-col lg:h-screen">
-      <header className="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-2">
+      <header className="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-2 with px-4 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <h1 className="font-display text-lg tracking-wide text-primary">Skyrim ESP Editor</h1>
         {file && (
           <span className="truncate font-mono text-xs text-muted-foreground">
