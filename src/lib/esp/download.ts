@@ -29,15 +29,39 @@ async function writeChunks(
   }
 }
 
+const FOLDER = "ESP Editor";
+
+/** "Mod.esp" -> "Mod (1).esp", "Mod (2).esp", ... so an existing file is never overwritten or blocked. */
+function numbered(name: string, n: number): string {
+  if (n === 0) return name;
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)} (${n})${name.slice(dot)}` : `${name} (${n})`;
+}
+
+async function existingNames(fs: typeof import("@capacitor/filesystem")): Promise<Set<string>> {
+  try {
+    const { files } = await fs.Filesystem.readdir({ path: FOLDER, directory: fs.Directory.Documents });
+    return new Set(files.map((f) => f.name.toLowerCase()));
+  } catch {
+    return new Set(); // folder does not exist yet
+  }
+}
+
 /** Saves into the phone's Documents/ESP Editor folder and returns that location. Falls back to the share sheet. */
 async function saveNative(bytes: Uint8Array, filename: string): Promise<string | void> {
   const fs = await import("@capacitor/filesystem");
   const safeName = filename.replace(/[\\/:*?"<>|]/g, "_") || "plugin.esp";
-  try {
-    await writeChunks(fs, fs.Directory.Documents, `ESP Editor/${safeName}`, bytes);
-    return `Documents/ESP Editor/${safeName}`;
-  } catch (e) {
-    console.warn("Direct save failed, using the share sheet instead:", e);
+  const taken = await existingNames(fs);
+  for (let n = 0; n < 50; n++) {
+    const candidate = numbered(safeName, n);
+    if (taken.has(candidate.toLowerCase())) continue;
+    try {
+      await writeChunks(fs, fs.Directory.Documents, `${FOLDER}/${candidate}`, bytes);
+      return `Documents/${FOLDER}/${candidate}`;
+    } catch (e) {
+      // Android can refuse to write a name that already exists; try the next number.
+      console.warn(`Saving as ${candidate} failed:`, e);
+    }
   }
   const { Share } = await import("@capacitor/share");
   const path = `export/${safeName}`;
@@ -46,9 +70,29 @@ async function saveNative(bytes: Uint8Array, filename: string): Promise<string |
   await Share.share({ title: safeName, dialogTitle: "Save plugin", url: uri });
 }
 
-/** In the Android app, resolves with the saved location (or nothing if it fell back to sharing). */
+/** Android's own pop-up message, visible wherever you are in the app. */
+async function notify(text: string): Promise<void> {
+  try {
+    const { Toast } = await import("@capacitor/toast");
+    await Toast.show({ text, duration: "long", position: "bottom" });
+  } catch {
+    /* the on-screen banner still reports the result */
+  }
+}
+
 export function downloadPlugin(bytes: Uint8Array, filename: string): void | Promise<string | void> {
-  if (Capacitor.isNativePlatform()) return saveNative(bytes, filename);
+  if (Capacitor.isNativePlatform()) {
+    return saveNative(bytes, filename).then(
+      async (where) => {
+        await notify(where ? `Saved to ${where}` : "Choose where to save the file");
+        return where;
+      },
+      async (e) => {
+        await notify(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+        throw e;
+      },
+    );
+  }
 
   const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/octet-stream" }));
   const anchor = document.createElement("a");
