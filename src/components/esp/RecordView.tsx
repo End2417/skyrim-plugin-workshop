@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { MoreHorizontal, Plus, Trash2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -29,6 +29,7 @@ import {
   getSubrecords,
   hex8,
   markDirty,
+  revertRecord,
   toHex,
   type EspFile,
   type EspRecord,
@@ -94,11 +95,28 @@ export function RecordView({ file, record, ctx, onChange, onDeleted }: Props) {
       <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
         <h2 className="font-display text-xl text-primary">{SIGNATURE_NAMES[record.type] ?? record.type}</h2>
         {record.dirty && <span className="text-xs text-modified">edited</span>}
+        {record.dirty && record.type !== "TES4" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto"
+            onClick={() => {
+              if (confirm("Undo all edits to this record and restore the original?")) {
+                revertRecord(record);
+                setEditing(null);
+                setError(null);
+                onChange({ reindex: true });
+              }
+            }}
+          >
+            <Undo2 /> Revert
+          </Button>
+        )}
         {record.type !== "TES4" && (
           <Button
             variant="ghost"
             size="sm"
-            className="ml-auto text-destructive"
+            className={record.dirty ? "text-destructive" : "ml-auto text-destructive"}
             onClick={() => {
               if (confirm(`Delete this ${record.type} record?`)) {
                 deleteRecord(file, record);

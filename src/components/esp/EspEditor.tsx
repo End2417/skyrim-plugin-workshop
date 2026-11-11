@@ -1,11 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Download, FolderOpen, Info, PackageOpen, Search, X } from "lucide-react";
+import { AlertCircle, Download, FolderOpen, Info, ListChecks, PackageOpen, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DecodeContext } from "@/lib/esp/decode";
 import { downloadPlugin } from "@/lib/esp/download";
 import { buildSearchIndex, searchIndex, type SearchIndex } from "@/lib/esp/search";
+import { applyDraft, clearDraft, fileSignature, loadDraft, makeDraft, saveDraft, type Draft } from "@/lib/esp/draft";
 import {
+  forgetStringFiles,
+  mergeStringTables,
+  parseStringsFile,
+  recallStringFiles,
+  rememberStringFiles,
+  setActiveStrings,
+  type StringTable,
+} from "@/lib/esp/strings";
+import {
+  revertRecord,
   buildFormIdIndex,
   countRecords,
   describeGroup,
@@ -21,6 +32,7 @@ import {
   type EspRecord,
 } from "@/lib/esp/format";
 import { AboutDialog, useFirstLaunchAbout } from "./AboutDialog";
+import { ChangesDialog } from "./ChangesDialog";
 import { ExtractDialog } from "./ExtractDialog";
 import { RecordRow, RecordTree, TREE_COLS } from "./RecordTree";
 import { RecordView } from "./RecordView";
@@ -41,6 +53,15 @@ export function EspEditor() {
   const [indexedFile, setIndexedFile] = useState<EspFile | null>(null);
   const [shown, setShown] = useState(PAGE_SIZE);
   const [aboutOpen, setAboutOpen] = useFirstLaunchAbout();
+  const [changesOpen, setChangesOpen] = useState(false);
+  const [strings, setStrings] = useState<StringTable | null>(null);
+  const [stringsMsg, setStringsMsg] = useState<string | null>(null);
+  const stringPartsRef = useRef<Map<string, { name: string; strings: Map<number, string>; bytes: Uint8Array }>>(new Map());
+  const stringsInputRef = useRef<HTMLInputElement>(null);
+  const [pendingDraft, setPendingDraft] = useState<Draft | null>(null);
+  const [draftNote, setDraftNote] = useState<string | null>(null);
+  const sigRef = useRef<string | null>(null);
+  const fileRef = useRef<EspFile | null>(null);
   const [modified, setModified] = useState(false);
   const [filterId, setFilterId] = useState("");
   const [filterEdid, setFilterEdid] = useState("");
@@ -77,12 +98,89 @@ export function EspEditor() {
     if (opts?.reindex) setIndexRev((r) => r + 1);
   };
 
+  // ----- strings files (names and descriptions of localized plugins such as Skyrim.esm) -----
+  function applyStrings(table: StringTable | null, target: EspFile | null = file) {
+    setActiveStrings(table);
+    setStrings(table);
+    if (target) for (const r of walkRecords(target.nodes)) r.nameCache = undefined; // names are looked up again
+    setIndexRev((n) => n + 1);
+    setRev((n) => n + 1);
+  }
+
+  function rebuildStrings(target: EspFile | null = file) {
+    const parts = [...stringPartsRef.current.values()];
+    applyStrings(parts.length ? mergeStringTables(parts) : null, target);
+  }
+
+  async function recallStrings(target: EspFile) {
+    const saved = await recallStringFiles(target.name);
+    if (!saved || fileRef.current !== target) return;
+    try {
+      for (const f of saved) stringPartsRef.current.set(f.name, { name: f.name, strings: parseStringsFile(f.name, f.bytes), bytes: f.bytes });
+      rebuildStrings(target);
+      setStringsMsg("Names restored from the strings files you loaded before.");
+    } catch {
+      /* stored files unreadable: the person can load them again */
+    }
+  }
+
+  async function loadStringFiles(list: File[]) {
+    if (!file || list.length === 0) return;
+    setStringsMsg(null);
+    try {
+      for (const f of list) {
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        stringPartsRef.current.set(f.name, { name: f.name, strings: parseStringsFile(f.name, bytes), bytes });
+      }
+      rebuildStrings();
+      const parts = [...stringPartsRef.current.values()];
+      const kept = await rememberStringFiles(file.name, parts.map((p) => ({ name: p.name, bytes: p.bytes })));
+      setStringsMsg(`Loaded ${parts.length} strings file${parts.length === 1 ? "" : "s"}.${kept ? " They will be remembered on this device." : ""}`);
+    } catch (e) {
+      setStringsMsg(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function forgetStrings() {
+    stringPartsRef.current = new Map();
+    rebuildStrings();
+    if (file) void forgetStringFiles(file.name);
+    setStringsMsg("Strings files forgotten.");
+  }
+
+  // ----- undo, drafts -----
+  function revert(r: EspRecord) {
+    if (revertRecord(r)) changed({ reindex: true });
+  }
+
+  function restoreDraft() {
+    if (!file || !pendingDraft) return;
+    const { applied, missing } = applyDraft(file, pendingDraft);
+    setPendingDraft(null);
+    changed({ reindex: true });
+    setDraftNote(`Restored ${applied} change${applied === 1 ? "" : "s"}${missing ? ` (${missing} no longer matched this file)` : ""}.`);
+  }
+
+  function discardDraft() {
+    if (sigRef.current) clearDraft(sigRef.current);
+    setPendingDraft(null);
+  }
+
   async function openFile(f: File) {
     setLoading(true);
     setError(null);
     setSaveFeedback(null);
     try {
-      const parsed = parseEsp(new Uint8Array(await f.arrayBuffer()), f.name);
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const parsed = parseEsp(bytes, f.name);
+      sigRef.current = fileSignature(f.name, bytes.length);
+      setPendingDraft(loadDraft(sigRef.current));
+      setDraftNote(null);
+      stringPartsRef.current = new Map();
+      setActiveStrings(null);
+      setStrings(null);
+      setStringsMsg(null);
+      if (fileInfo(parsed).localized) void recallStrings(parsed);
       setFile(parsed);
       setSelected(parsed.nodes[0] as EspRecord);
       setExpanded(new Set());
@@ -175,6 +273,46 @@ export function EspEditor() {
     };
   }, [filterEdid, file, indexedFile]);
 
+  fileRef.current = file;
+
+  // Autosave a draft of the edits shortly after each change, and right away when the app goes to the background
+  // (Android may close it there). A draft waiting to be restored is never overwritten.
+  const saveNow = () => {
+    const f = fileRef.current;
+    const sig = sigRef.current;
+    if (!f || !sig) return;
+    const draft = makeDraft(f, sig);
+    if (!draft) {
+      clearDraft(sig);
+      setDraftNote(null);
+    } else {
+      const ok = saveDraft(draft);
+      setDraftNote(ok ? `Draft saved ${new Date(draft.savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Draft too large to autosave");
+    }
+  };
+  const saveNowRef = useRef(saveNow);
+  saveNowRef.current = saveNow;
+
+  useEffect(() => {
+    if (!file || pendingDraft || rev === 0) return;
+    const t = setTimeout(() => saveNowRef.current(), 1200);
+    return () => clearTimeout(t);
+  }, [rev, file, pendingDraft]);
+
+  useEffect(() => {
+    const flush = () => {
+      if (document.visibilityState === "hidden" && !pendingDraftRef.current) saveNowRef.current();
+    };
+    document.addEventListener("visibilitychange", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", flush);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, []);
+  const pendingDraftRef = useRef(pendingDraft);
+  pendingDraftRef.current = pendingDraft;
+
   const preparingSearch = !!file && filterEdid.trim() !== "" && indexedFile !== file;
 
   const breadcrumb: string[] = [];
@@ -194,11 +332,15 @@ export function EspEditor() {
             {countRecords(file.nodes).toLocaleString()} records
             {info.masters.length > 0 && ` · masters: ${info.masters.join(", ")}`}
             {modified && <span className="ml-2 text-modified">● unsaved changes</span>}
+            {draftNote && <span className="ml-2">· {draftNote}</span>}
           </span>
         )}
         <div className="ml-auto flex gap-2">
           <Button variant="ghost" size="icon" className="size-8" onClick={() => setAboutOpen(true)} aria-label="About and credits">
             <Info />
+          </Button>
+          <Button variant="ghost" size="icon" className="size-8" onClick={() => setChangesOpen(true)} disabled={!file} aria-label="Review your changes" title="Review your changes">
+            <ListChecks />
           </Button>
           <input
             ref={inputRef}
@@ -245,6 +387,17 @@ export function EspEditor() {
           <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setSaveFeedback(null)} aria-label="Dismiss download status">
             <X className="size-4" />
           </Button>
+        </div>
+      )}
+
+      {pendingDraft && (
+        <div role="status" className="flex flex-wrap items-center gap-2 border-b bg-muted px-4 py-3 text-sm">
+          <span className="min-w-0 flex-1">
+            Unsaved changes from {new Date(pendingDraft.savedAt).toLocaleString()} were found for this file ({pendingDraft.records.length} edited
+            {pendingDraft.deleted.length ? `, ${pendingDraft.deleted.length} deleted` : ""}).
+          </span>
+          <Button size="sm" onClick={restoreDraft}>Restore</Button>
+          <Button size="sm" variant="secondary" onClick={discardDraft}>Discard</Button>
         </div>
       )}
 
@@ -307,6 +460,32 @@ export function EspEditor() {
               />
               <button type="submit" className="sr-only">Search</button>
             </form>
+            {info.localized && (
+              <div className="border-b px-3 py-1.5 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span>{strings ? `Names loaded (${strings.size.toLocaleString()} strings)` : "Names are stored in separate strings files."}</span>
+                  <button className="font-medium text-primary underline underline-offset-2" onClick={() => stringsInputRef.current?.click()}>
+                    {strings ? "Add files" : "Load strings files"}
+                  </button>
+                  {strings && (
+                    <button className="underline underline-offset-2" onClick={forgetStrings}>
+                      Forget
+                    </button>
+                  )}
+                </div>
+                {stringsMsg && <p className="mt-1 break-words">{stringsMsg}</p>}
+                <input
+                  ref={stringsInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    void loadStringFiles(Array.from(e.target.files ?? []));
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+            )}
             {preparingSearch && <p className="border-b px-3 py-1 text-xs text-muted-foreground">Preparing search… large plugins take a moment the first time.</p>}
             <div className={`${TREE_COLS} border-b bg-muted px-2 py-1 text-xs font-medium text-muted-foreground`}>
               <span className="pl-5">FormID</span>
@@ -387,6 +566,9 @@ export function EspEditor() {
         </div>
       )}
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      {file && (
+        <ChangesDialog open={changesOpen} onOpenChange={setChangesOpen} file={file} ctx={ctx} rev={rev} onRevert={revert} onGoTo={(r) => select(r, true)} />
+      )}
       {file && <ExtractDialog open={extractOpen} onOpenChange={setExtractOpen} file={file} selected={selected} />}
     </div>
   );

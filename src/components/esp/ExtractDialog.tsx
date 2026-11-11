@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { downloadPlugin } from "@/lib/esp/download";
 import { extractPlugin, fieldKey, findLocalizedFields, listChangedRecords } from "@/lib/esp/extract";
+import { lookupString } from "@/lib/esp/strings";
 import { getEditorId, hex8, type EspFile, type EspRecord } from "@/lib/esp/format";
 
 interface Props {
@@ -61,10 +62,10 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
         sourceName,
         text: new Map(Object.entries(text)),
       });
-      await downloadPlugin(bytes, name);
+      const savedTo = await downloadPlugin(bytes, name);
       setStatus({
         ok: true,
-        message: `${name} was handed to your device (${chosen.length} record${chosen.length === 1 ? "" : "s"}, ${(bytes.length / 1024).toFixed(1)} KB). This app cannot confirm where it was saved. Put it in Skyrim's Data folder and enable it after ${sourceName} in your load order.`,
+        message: `${savedTo ? `Saved to ${savedTo}` : `${name} was handed to your device`} (${chosen.length} record${chosen.length === 1 ? "" : "s"}, ${(bytes.length / 1024).toFixed(1)} KB).${savedTo ? "" : " This app cannot confirm where it was saved."} Put it in Skyrim's Data folder and enable it after ${sourceName} in your load order.`,
       });
     } catch (e) {
       setStatus({ ok: false, message: e instanceof Error ? e.message : String(e) });
@@ -118,8 +119,8 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
         <div className="space-y-2 rounded-md border p-3">
           <p className="text-sm font-medium">Text in {sourceName || "the source"} is stored in string tables</p>
           <p className="text-xs text-muted-foreground">
-            A new plugin can't use those tables, so enter the text to store directly. Leave a name blank to use its Editor ID. Blank
-            descriptions are left out.
+            A new plugin can't use those tables, so the text is stored directly. Text found in the strings files you loaded is filled in
+            automatically (shown greyed out). Otherwise a blank name uses its Editor ID, and a blank description is left out.
           </p>
           {localized.map((f) => (
             <div key={fieldKey(f)} className="grid grid-cols-[8rem_1fr] items-center gap-2 text-xs">
@@ -128,7 +129,7 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
               </span>
               <Input
                 aria-label={`${f.sub} text for ${label(f.record)}`}
-                placeholder={f.sub === "FULL" ? (getEditorId(f.record) ?? "Name") : "(omit)"}
+                placeholder={lookupString(f.stringId) ?? (f.sub === "FULL" ? (getEditorId(f.record) ?? "Name") : "(omit)")}
                 value={text[fieldKey(f)] ?? ""}
                 onChange={(e) => setText({ ...text, [fieldKey(f)]: e.target.value })}
                 className="h-8 text-xs"
