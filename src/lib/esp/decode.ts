@@ -10,6 +10,7 @@ import {
   zstringValue,
   type Subrecord,
 } from "./format";
+import { lookupString } from "./strings";
 
 export interface DecodeContext {
   localized: boolean;
@@ -118,7 +119,11 @@ function displayLeaf(def: FieldDef, data: Uint8Array, leaf: Leaf, ctx: DecodeCon
     case "f32": return fmtFloat(v as number);
     case "fid": return ctx.resolveFormId(v as number);
     case "str": return v as string;
-    case "lstr": return ctx.localized ? `[String ID ${hex8(v as number)}]` : (v as string);
+    case "lstr": {
+      if (!ctx.localized) return v as string;
+      const text = lookupString(v as number); // from the strings files, when loaded
+      return text !== null ? `${text}  [String ID ${hex8(v as number)}]` : `[String ID ${hex8(v as number)}]`;
+    }
     case "bytes": {
       const s = v as string;
       return s.length > 150 ? `${s.slice(0, 150)} … (${leaf.size < 0 ? data.length - leaf.offset : leaf.size} bytes)` : s || "(empty)";

@@ -15,6 +15,7 @@ import {
   type EspRecord,
   type Subrecord,
 } from "./format";
+import { lookupString } from "./strings";
 
 const FLAG_ESM = 0x00000001;
 const FLAG_LOCALIZED = 0x00000080;
@@ -134,7 +135,7 @@ function rewriteLocalized(file: EspFile, records: EspRecord[], opts: ExtractOpti
     const subs = getSubrecords(record).slice();
     const drop = new Set<number>();
     for (const f of list) {
-      const typed = opts.text?.get(fieldKey(f))?.trim();
+      const typed = opts.text?.get(fieldKey(f))?.trim() || lookupString(f.stringId) || ""; // typed text, else the loaded strings files
       if (typed) subs[f.index] = { type: f.sub, data: encodeZString(typed) };
       else if (f.sub === "FULL") subs[f.index] = { type: "FULL", data: encodeZString(getEditorId(record) ?? "Unnamed") };
       else drop.add(f.index); // no text known: omit rather than leave an unreadable string ID

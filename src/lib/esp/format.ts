@@ -2,6 +2,7 @@
 // Records keep their original bytes until edited, so untouched records round-trip byte-for-byte.
 import { unzlibSync, zlibSync } from "fflate";
 import { SIGNATURE_NAMES } from "./defs";
+import { lookupString } from "./strings";
 
 export const FLAG_COMPRESSED = 0x00040000;
 export const HEADER_SIZE = 24;
@@ -37,6 +38,8 @@ export interface EspRecord {
   parent: EspGroup | null;
   editorIdCache?: string | null | undefined;
   nameCache?: string | null | undefined;
+  /** Header values from before the first edit, so the record can be reverted. */
+  original?: { flags: number; formId: number; stamp: number; version: number; unknown: number } | undefined;
 }
 
 export interface EspGroup {
@@ -55,6 +58,8 @@ export type EspNode = EspRecord | EspGroup;
 export interface EspFile {
   name: string;
   nodes: EspNode[];
+  /** Keys (see recordKey) of records deleted in this session, so a draft can repeat the deletions. */
+  deleted?: string[];
 }
 
 let uidCounter = 0;
@@ -174,9 +179,38 @@ export function getSubrecords(r: EspRecord): Subrecord[] {
 /** Call before mutating a record's header or subrecords. */
 export function markDirty(r: EspRecord) {
   getSubrecords(r);
+  if (!r.dirty && !r.original) {
+    r.original = { flags: r.flags, formId: r.formId, stamp: r.stamp, version: r.version, unknown: r.unknown };
+  }
   r.dirty = true;
   r.editorIdCache = undefined;
   r.nameCache = undefined;
+}
+
+/** The record's subrecords exactly as they were in the file that was opened. */
+export function getOriginalSubrecords(r: EspRecord): Subrecord[] {
+  return parseSubrecords(decodeRaw(r));
+}
+
+/** Identifies a record across sessions: its type and its FormID as first loaded. */
+export const recordKey = (r: EspRecord) => `${r.type}:${hex8(r.original?.formId ?? r.formId)}`;
+
+/** Undoes every edit to a record. Returns false if it was never edited. Rebuild indexes afterwards (the FormID may change back). */
+export function revertRecord(r: EspRecord): boolean {
+  if (!r.dirty) return false;
+  if (r.original) {
+    r.flags = r.original.flags;
+    r.formId = r.original.formId;
+    r.stamp = r.original.stamp;
+    r.version = r.original.version;
+    r.unknown = r.original.unknown;
+  }
+  r.original = undefined;
+  r.subrecords = null; // re-read from the original bytes on next access
+  r.dirty = false;
+  r.editorIdCache = undefined;
+  r.nameCache = undefined;
+  return true;
 }
 
 export function serializeSubrecords(subs: Subrecord[]): Uint8Array {
@@ -404,6 +438,7 @@ export function deleteRecord(file: EspFile, r: EspRecord) {
   const i = list.indexOf(r);
   if (i < 0) return;
   list.splice(i, 1);
+  (file.deleted ??= []).push(recordKey(r));
   const tes4 = file.nodes[0];
   if (tes4 && tes4.kind === "record" && tes4 !== r) {
     const hedr = getSubrecords(tes4).find((s) => s.type === "HEDR");
@@ -437,17 +472,18 @@ export function peekSubrecord(r: EspRecord, type: string): Uint8Array | null {
   return null;
 }
 
-/** The record's in-game name (FULL), or null when missing or stored in a strings file. */
+/** The record's in-game name (FULL). In a localized plugin it comes from the loaded strings files, if any. */
 export function getDisplayName(r: EspRecord, localized: boolean): string | null {
   if (r.nameCache !== undefined) return r.nameCache;
   let result: string | null = null;
-  if (!localized) {
-    try {
-      const d = peekSubrecord(r, "FULL");
-      result = d ? zstringValue(d) : null;
-    } catch {
-      result = null;
+  try {
+    const d = peekSubrecord(r, "FULL");
+    if (d) {
+      if (!localized) result = zstringValue(d);
+      else if (d.length === 4) result = lookupString(view(d).getUint32(0, true));
     }
+  } catch {
+    result = null;
   }
   r.nameCache = result;
   return result;
