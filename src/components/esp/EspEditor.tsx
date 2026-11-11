@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DecodeContext } from "@/lib/esp/decode";
 import { downloadPlugin } from "@/lib/esp/download";
-import { searchPlugin } from "@/lib/esp/search";
+import { buildSearchIndex, searchIndex, type SearchIndex } from "@/lib/esp/search";
 import {
   buildFormIdIndex,
   countRecords,
@@ -26,6 +26,8 @@ import { RecordRow, RecordTree, TREE_COLS } from "./RecordTree";
 import { RecordView } from "./RecordView";
 
 const MAX_RESULTS = 500;
+/** Rows drawn at once; the rest are one tap away, so a broad search stays quick to show. */
+const PAGE_SIZE = 100;
 
 export function EspEditor() {
   const [file, setFile] = useState<EspFile | null>(null);
@@ -35,6 +37,9 @@ export function EspEditor() {
   const [saveFeedback, setSaveFeedback] = useState<{ failed: boolean; filename: string; detail?: string; savedTo?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
+  const searchIndexRef = useRef<SearchIndex | null>(null);
+  const [indexedFile, setIndexedFile] = useState<EspFile | null>(null);
+  const [shown, setShown] = useState(PAGE_SIZE);
   const [aboutOpen, setAboutOpen] = useFirstLaunchAbout();
   const [modified, setModified] = useState(false);
   const [filterId, setFilterId] = useState("");
@@ -123,18 +128,54 @@ export function EspEditor() {
     setExpanded(next);
   }
 
-  function runSearch(q: string) {
-    if (!file) return;
-    setResults(q.trim() ? searchPlugin(file, q, MAX_RESULTS, info.localized) : null);
-  }
+  // Prepare the search in the background as soon as a file is open (and again after records
+  // are added or removed), so typing never waits on it.
+  useEffect(() => {
+    if (!file) {
+      searchIndexRef.current = null;
+      setIndexedFile(null);
+      return;
+    }
+    if (searchIndexRef.current?.file !== file) {
+      searchIndexRef.current = null;
+      setIndexedFile(null);
+    }
+    let cancelled = false;
+    void buildSearchIndex(file, info.localized, () => cancelled).then((ix) => {
+      if (cancelled || !ix) return;
+      searchIndexRef.current = ix;
+      setIndexedFile(file);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file, indexRev]);
 
-  // Search as you type, a moment after you stop, so big plugins stay responsive.
+  // Search as you type, a moment after you stop. Runs in slices, and a newer search replaces an older one.
   useEffect(() => {
     if (!file) return;
-    const t = setTimeout(() => runSearch(filterEdid), 350);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterEdid, file]);
+    if (!filterEdid.trim()) {
+      setResults(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      const ix = searchIndexRef.current;
+      if (!ix || ix.file !== file) return; // runs again when the index is ready
+      void searchIndex(ix, filterEdid, MAX_RESULTS, () => cancelled).then((res) => {
+        if (cancelled || !res) return;
+        setResults(res);
+        setShown(PAGE_SIZE);
+      });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [filterEdid, file, indexedFile]);
+
+  const preparingSearch = !!file && filterEdid.trim() !== "" && indexedFile !== file;
 
   const breadcrumb: string[] = [];
   if (file && selected) {
@@ -249,7 +290,7 @@ export function EspEditor() {
               role="search"
               onSubmit={(e) => {
                 e.preventDefault();
-                runSearch(filterEdid);
+                (document.activeElement as HTMLElement | null)?.blur(); // hide the keyboard to see the results
               }}
               className="flex items-center gap-2 border-b p-2"
             >
@@ -266,6 +307,7 @@ export function EspEditor() {
               />
               <button type="submit" className="sr-only">Search</button>
             </form>
+            {preparingSearch && <p className="border-b px-3 py-1 text-xs text-muted-foreground">Preparing search… large plugins take a moment the first time.</p>}
             <div className={`${TREE_COLS} border-b bg-muted px-2 py-1 text-xs font-medium text-muted-foreground`}>
               <span className="pl-5">FormID</span>
               <span>EditorID</span>
@@ -287,7 +329,7 @@ export function EspEditor() {
                       Clear filter
                     </button>
                   </div>
-                  {results.map((r) => (
+                  {results.slice(0, shown).map((r) => (
                     <RecordRow
                       key={r.uid}
                       record={r}
@@ -298,6 +340,13 @@ export function EspEditor() {
                       onSelect={() => select(r, true)}
                     />
                   ))}
+                  {results.length > shown && (
+                    <div className="px-3 py-2">
+                      <Button variant="secondary" size="sm" onClick={() => setShown(shown + PAGE_SIZE * 2)}>
+                        Show more ({results.length - shown} left)
+                      </Button>
+                    </div>
+                  )}
                   {results.length === 0 && (
                     <p className="px-3 py-4 text-sm text-muted-foreground">
                       Nothing matches “{filterEdid.trim()}”. Try fewer or shorter words, such as “bow” instead of “hunting bow”.
