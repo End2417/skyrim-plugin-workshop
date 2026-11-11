@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Download, FolderOpen, PackageOpen, Search, X } from "lucide-react";
+import { AlertCircle, Download, FolderOpen, Info, PackageOpen, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DecodeContext } from "@/lib/esp/decode";
@@ -20,6 +20,7 @@ import {
   type EspGroup,
   type EspRecord,
 } from "@/lib/esp/format";
+import { AboutDialog, useFirstLaunchAbout } from "./AboutDialog";
 import { ExtractDialog } from "./ExtractDialog";
 import { RecordRow, RecordTree, TREE_COLS } from "./RecordTree";
 import { RecordView } from "./RecordView";
@@ -34,6 +35,7 @@ export function EspEditor() {
   const [saveFeedback, setSaveFeedback] = useState<{ failed: boolean; filename: string; detail?: string; savedTo?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useFirstLaunchAbout();
   const [modified, setModified] = useState(false);
   const [filterId, setFilterId] = useState("");
   const [filterEdid, setFilterEdid] = useState("");
@@ -154,6 +156,9 @@ export function EspEditor() {
           </span>
         )}
         <div className="ml-auto flex gap-2">
+          <Button variant="ghost" size="icon" className="size-8" onClick={() => setAboutOpen(true)} aria-label="About and credits">
+            <Info />
+          </Button>
           <input
             ref={inputRef}
             type="file"
@@ -332,6 +337,7 @@ export function EspEditor() {
           </main>
         </div>
       )}
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       {file && <ExtractDialog open={extractOpen} onOpenChange={setExtractOpen} file={file} selected={selected} />}
     </div>
   );
