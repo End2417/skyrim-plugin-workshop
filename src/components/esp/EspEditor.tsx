@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState } from "react";
-import { AlertCircle, Download, FolderOpen, PackageOpen, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, Download, FolderOpen, PackageOpen, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DecodeContext } from "@/lib/esp/decode";
 import { downloadPlugin } from "@/lib/esp/download";
+import { searchPlugin } from "@/lib/esp/search";
 import {
   buildFormIdIndex,
   countRecords,
@@ -30,7 +31,7 @@ export function EspEditor() {
   const [selected, setSelected] = useState<EspRecord | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  const [saveFeedback, setSaveFeedback] = useState<{ failed: boolean; filename: string; detail?: string } | null>(null);
+  const [saveFeedback, setSaveFeedback] = useState<{ failed: boolean; filename: string; detail?: string; savedTo?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
   const [modified, setModified] = useState(false);
@@ -94,8 +95,8 @@ export function EspEditor() {
     setSaveFeedback(null);
     try {
       const bytes = serializeEsp(file);
-      await downloadPlugin(bytes, file.name);
-      setSaveFeedback({ failed: false, filename: file.name });
+      const savedTo = await downloadPlugin(bytes, file.name);
+      setSaveFeedback({ failed: false, filename: file.name, ...(savedTo ? { savedTo } : {}) });
       // A dispatched click is not proof that the file was saved. Keep edits
       // marked unsaved until a confirmed save mechanism is available.
     } catch (e) {
@@ -120,21 +121,18 @@ export function EspEditor() {
     setExpanded(next);
   }
 
-  function runFilter(e: React.FormEvent) {
-    e.preventDefault();
+  function runSearch(q: string) {
     if (!file) return;
-    const id = filterId.trim().replace(/^0x/i, "").toUpperCase();
-    const ed = filterEdid.trim().toLowerCase();
-    if (!id && !ed) return setResults(null);
-    const out: EspRecord[] = [];
-    for (const r of walkRecords(file.nodes)) {
-      if (id && !hex8(r.formId).includes(id)) continue;
-      if (ed && !(getEditorId(r) ?? "").toLowerCase().includes(ed)) continue;
-      out.push(r);
-      if (out.length >= MAX_RESULTS) break;
-    }
-    setResults(out);
+    setResults(q.trim() ? searchPlugin(file, q, MAX_RESULTS, info.localized) : null);
   }
+
+  // Search as you type, a moment after you stop, so big plugins stay responsive.
+  useEffect(() => {
+    if (!file) return;
+    const t = setTimeout(() => runSearch(filterEdid), 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterEdid, file]);
 
   const breadcrumb: string[] = [];
   if (file && selected) {
@@ -146,8 +144,8 @@ export function EspEditor() {
 
   return (
     <div className="flex min-h-screen flex-col lg:h-screen">
-      <header className="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-2 with px-4 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
-        <h1 className="font-display text-lg tracking-wide text-primary">Skyrim ESP Editor</h1>
+      <header className="flex flex-wrap items-center gap-3 border-b bg-card px-4 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+        <h1 className="font-display text-lg tracking-wide text-primary">Skyrim ESP Editor for Android</h1>
         {file && (
           <span className="truncate font-mono text-xs text-muted-foreground">
             {countRecords(file.nodes).toLocaleString()} records
@@ -186,11 +184,13 @@ export function EspEditor() {
         >
           {saveFeedback.failed ? <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" /> : <Download className="mt-0.5 size-4 shrink-0 text-primary" />}
           <div className="min-w-0 flex-1 break-words">
-            <p className="font-medium">{saveFeedback.failed ? "Download failed" : "Download requested"} — {saveFeedback.filename}</p>
+            <p className="font-medium">{saveFeedback.failed ? "Download failed" : saveFeedback.savedTo ? "Saved" : "Download requested"} — {saveFeedback.filename}</p>
             <p className="mt-1 text-muted-foreground">
               {saveFeedback.failed
                 ? `The download could not be started. Your edits are still here. ${saveFeedback.detail ?? ""}`
-                : "Check your browser’s Downloads or Android download notification to confirm it completed. This browser cannot confirm that the file reached your device; your edits are still here."}
+                : saveFeedback.savedTo
+                  ? `Saved to ${saveFeedback.savedTo} on your device. Your edits are still here.`
+                  : "Check your browser’s Downloads or Android download notification to confirm it completed. This browser cannot confirm that the file reached your device; your edits are still here."}
             </p>
             <Button variant="secondary" size="sm" className="mt-2" onClick={save}>
               <Download /> Try download again
@@ -240,12 +240,26 @@ export function EspEditor() {
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(360px,460px)_1fr]">
           <aside className="flex min-h-0 flex-col border-b lg:border-r lg:border-b-0">
-            <form onSubmit={runFilter} className="grid grid-cols-[auto_1fr_auto_1fr] items-center gap-2 border-b p-2 text-xs">
-              <label htmlFor="flt-id" className="text-muted-foreground">FormID</label>
-              <Input id="flt-id" value={filterId} onChange={(e) => setFilterId(e.target.value)} className="h-7 font-mono text-xs" />
-              <label htmlFor="flt-ed" className="text-muted-foreground">Editor ID</label>
-              <Input id="flt-ed" value={filterEdid} onChange={(e) => setFilterEdid(e.target.value)} className="h-7 font-mono text-xs" />
-              <button type="submit" className="sr-only">Filter</button>
+            <form
+              role="search"
+              onSubmit={(e) => {
+                e.preventDefault();
+                runSearch(filterEdid);
+              }}
+              className="flex items-center gap-2 border-b p-2"
+            >
+              <Search className="size-4 shrink-0 text-muted-foreground" />
+              <Input
+                id="flt-q"
+                type="search"
+                enterKeyHint="search"
+                aria-label="Search records"
+                placeholder="Search: bow, iron sword, 00012EB7"
+                value={filterEdid}
+                onChange={(e) => setFilterEdid(e.target.value)}
+                className="h-8 text-sm"
+              />
+              <button type="submit" className="sr-only">Search</button>
             </form>
             <div className={`${TREE_COLS} border-b bg-muted px-2 py-1 text-xs font-medium text-muted-foreground`}>
               <span className="pl-5">FormID</span>
@@ -275,9 +289,15 @@ export function EspEditor() {
                       depth={-1}
                       selected={selected === r}
                       localized={info.localized}
+                      showType
                       onSelect={() => select(r, true)}
                     />
                   ))}
+                  {results.length === 0 && (
+                    <p className="px-3 py-4 text-sm text-muted-foreground">
+                      Nothing matches “{filterEdid.trim()}”. Try fewer or shorter words, such as “bow” instead of “hunting bow”.
+                    </p>
+                  )}
                 </>
               ) : (
                 <RecordTree

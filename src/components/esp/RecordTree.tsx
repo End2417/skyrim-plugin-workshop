@@ -23,12 +23,15 @@ export function RecordRow({
   depth,
   selected,
   localized,
+  showType = false,
   onSelect,
 }: {
   record: EspRecord;
   depth: number;
   selected: boolean;
   localized: boolean;
+  /** Search results show the record type (WEAP, MISC...) so look-alikes are easy to tell apart. */
+  showType?: boolean;
   onSelect: () => void;
 }) {
   return (
@@ -37,7 +40,7 @@ export function RecordRow({
       className={cn(TREE_COLS, "w-full py-0.5 pr-2 text-left font-mono text-xs hover:bg-accent", selected && "bg-selected")}
     >
       <span className="truncate text-muted-foreground" style={{ paddingLeft: `${depth * 12 + 22}px` }}>
-        {record.type === "TES4" ? "File Header" : hex8(record.formId)}
+        {record.type === "TES4" ? "File Header" : showType ? `${record.type} ${hex8(record.formId)}` : hex8(record.formId)}
       </span>
       <span className="truncate">{getEditorId(record)}</span>
       <span className="truncate text-muted-foreground">
