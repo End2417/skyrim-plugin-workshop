@@ -370,7 +370,7 @@ export function EspEditor() {
       <header className="flex flex-wrap items-center gap-3 border-b bg-card px-4 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <h1 className="font-display text-lg tracking-wide text-primary">Skyrim ESP Editor for Android</h1>
         {file && (
-          <span className="truncate font-mono text-xs text-muted-foreground">
+          <span className="max-w-full truncate font-mono text-xs text-muted-foreground">
             {countRecords(file.nodes).toLocaleString()} records
             {edition === "SE" && " · Special Edition plugin"}
             {info.masters.length > 0 && ` · masters: ${info.masters.join(", ")}`}
@@ -378,7 +378,7 @@ export function EspEditor() {
             {draftNote && <span className="ml-2">· {draftNote}</span>}
           </span>
         )}
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex max-w-full flex-wrap justify-end gap-2">
           <Button variant="ghost" size="icon" className="size-8" onClick={() => setAboutOpen(true)} aria-label="About and credits">
             <Info />
           </Button>

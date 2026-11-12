@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Skyrim ESP Editor for Android</title>
-<meta name="description" content="Open, edit and extract Skyrim plugin files on your phone. Change a sword’s damage, then save just that change as a small .esp mod.">
+<meta name="description" content="Open, edit and extract Skyrim plugin files on your phone, and convert Special Edition plugins to Legendary Edition. Change a sword’s damage, then save just that change as a small .esp mod.">
 <meta name="theme-color" content="#152846">
 <link rel="icon" href="https://raw.githubusercontent.com/End2417/skyrim-plugin-workshop/main/public/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -100,12 +100,12 @@
     <div class="wrap">
       <div>
         <h1>Edit Skyrim plugins on your phone</h1>
-        <p class="lede">Open a .esp or .esm, change a record, and save just that change as its own small mod. Nothing leaves your device.</p>
+        <p class="lede">Open a .esp or .esm, change a record, and save just that change as its own small mod. Convert Special Edition plugins for Legendary Edition games. Nothing leaves your device.</p>
         <div class="actions">
           <a class="btn primary" href="https://github.com/End2417/skyrim-plugin-workshop/releases/latest">Download for Android</a>
           <a class="btn ghost" href="#install">How to install</a>
         </div>
-        <p class="small">Free. Android 6 or newer. The download is an APK file.</p>
+        <p class="small">Version 1.3.0. Free. Android 6 or newer. The download is an APK file.</p>
       </div>
 
       <div class="flow" role="img" aria-label="Example: the Damage field of IronSword changed from 7 to 12, then extracted into Skyrim_Changes.esp, a file with one record and Skyrim.esm as its master.">
@@ -134,29 +134,61 @@
         </div>
         <div>
           <h3>Extract only your change</h3>
-          <p>Edited a sword in Skyrim.esm? Pick it and save it alone as a new .esp that overrides the original. Your edit becomes a mod, and Skyrim.esm stays untouched.</p>
+          <p>Edited a sword in Skyrim.esm? Pick it and save it alone as a new .esp that overrides the original. Include the records your change depends on, or add it to an existing patch plugin.</p>
+        </div>
+        <div>
+          <h3>Special Edition to Legendary Edition</h3>
+          <p>Use Special Edition plugins with a Legendary Edition game, such as the Android port. To LE sets the LE header and form versions, clears the ESL flag and flags Creation Club masters. Meshes, textures, archives and animations still need converting separately.</p>
         </div>
         <div>
           <h3>Check before you share</h3>
-<p>Check plugin finds FormIDs that point at a master the plugin doesn’t list and references to records that don’t exist. Add a master’s file to verify references into it too. It only sees fields the editor knows are FormIDs, so test in xEdit or in the game as well.</p>
-</div>
-<div>
-<h3>Special Edition to Legendary Edition</h3>
-<p>Use Special Edition plugins with a Legendary Edition game, such as the Android port. To LE sets the LE header and form versions, clears the ESL flag and flags Creation Club masters. Meshes, textures, archives and animations still need converting separately.</p>
-</div>
-<div>
-<h3>Private and offline</h3>
-          <p>Files are opened and saved on your phone. The app needs no account and never uploads your files. Saved plugins go to Documents/ESP Editor, or any folder you choose. Tap a plugin in your Files app to open it here.</p>
+          <p>Check plugin finds FormIDs that point at a master the plugin doesn’t list and references to records that don’t exist. Add a master’s file to verify references into it too. It only sees fields the editor knows are FormIDs, so test in xEdit or in the game as well.</p>
+        </div>
+        <div>
+          <h3>Open from your Files app</h3>
+          <p>Tap a .esp, .esm or .esl in your Files app and choose ESP Editor. Pick your own save folder, or use Documents/ESP Editor. Files are never overwritten.</p>
+        </div>
+        <div>
+          <h3>Private and offline</h3>
+          <p>Files are opened and saved on your phone. The app needs no account and never uploads your files.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <section class="install" id="install">
+  <section class="install" id="whats-new">
+    <div class="wrap">
+      <h2>What’s new in 1.3.0</h2>
+      <ol>
+        <li><b>Special Edition to Legendary Edition.</b> The <b>To LE</b> button makes a Legendary Edition copy of a Special Edition plugin, and Extract can save in Legendary Edition format. It has not been tested in the game.</li>
+        <li><b>Plugin check.</b> The shield icon finds bad master references and missing records, with a Go to button for each.</li>
+        <li><b>Open with.</b> Tap a plugin in your Files app to open it here.</li>
+        <li><b>Extract.</b> Include dependencies, or add records to an existing patch plugin.</li>
+        <li><b>Save folder.</b> Choose where files are saved. Files are never overwritten.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="install">
     <div class="wrap">
       <h2>Install on Android</h2>
       <ol>
         <li>Open the <a href="https://github.com/End2417/skyrim-plugin-workshop/releases/latest">latest release</a> on your phone and download <code>ESP-Editor.apk</code>.</li>
         <li>Open the downloaded file. If Android asks, allow your browser or Files app to install unknown apps.</li>
         <li>Tap <b>Install</b>, then open <b>ESP Editor</b>.</li>
-        <li>Tap <b>Open</b> and choose a plugin. Make your edits, then use <b>Save</b> for the whole file or <b>Extract</b> for
+        <li>Tap <b>Open</b> and choose a plugin. Make your edits, then use <b>Save</b> for the whole file or <b>Extract</b> for only the records you changed. Use <b>To LE</b> on a Special Edition plugin.</li>
+      </ol>
+      <p class="small">You can also <a href="https://skyrim-plugin-workshop.lovable.app">use it in your browser</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>This project was created with the help of AI tools, including Lovable and Claude by Anthropic, and has not been fully reviewed or tested. Back up your plugins before editing them, and test extracted or converted files in xEdit or in the game before sharing them.</p>
+    <p>An unofficial fan tool, not affiliated with Bethesda Softworks. Provided as is, without warranty of any kind.</p>
+    <p><a href="https://github.com/End2417/skyrim-plugin-workshop">Source on GitHub</a></p>
+  </div>
+</footer>
+</body>
+</html>
