@@ -1,13 +1,15 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { PackageOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Input } from "@/components/ui/input";
 import { downloadPlugin } from "@/lib/esp/download";
-import { extractPlugin, fieldKey, findLocalizedFields, listChangedRecords } from "@/lib/esp/extract";
+import { convertToLe, detectEdition } from "@/lib/esp/convert";
+import { extractPlugin, fieldKey, findDependencies, findLocalizedFields, listChangedRecords, mergeIntoPlugin, planMasters } from "@/lib/esp/extract";
 import { lookupString } from "@/lib/esp/strings";
-import { getEditorId, hex8, type EspFile, type EspRecord } from "@/lib/esp/format";
+import { buildFormIdIndex, getEditorId, hex8, parseEsp, type EspFile, type EspRecord } from "@/lib/esp/format";
 
 interface Props {
   open: boolean;
@@ -33,6 +35,7 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
   const changed = useMemo(() => listChangedRecords(file), [file]);
   const extra = selected && selected.type !== "TES4" && !selected.dirty ? selected : null;
   const candidates = extra ? [...changed, extra] : changed;
+  const index = useMemo(() => buildFormIdIndex(file), [file]);
 
   const base = file.name.replace(/\.(esp|esm|esl)$/i, "");
   const [picked, setPicked] = useState<Set<number>>(() => new Set(changed.map((r) => r.uid)));
@@ -42,8 +45,28 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
   const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // records the chosen ones depend on
+  const [includeDeps, setIncludeDeps] = useState(false);
+  const [depth, setDepth] = useState(1);
+  const [skipped, setSkipped] = useState<Set<number>>(new Set());
+
+  // destination: a new plugin, or an existing patch
+  const [dest, setDest] = useState<"new" | "patch">("new");
+  // Special Edition source: offer the Legendary Edition format, on by default since LE is what this app targets
+  const isSe = useMemo(() => detectEdition(file).edition === "SE", [file]);
+  const [asLe, setAsLe] = useState(isSe);
+  const [patch, setPatch] = useState<{ name: string; bytes: Uint8Array; file: EspFile } | null>(null);
+  const patchInput = useRef<HTMLInputElement>(null);
+
   const chosen = candidates.filter((r) => picked.has(r.uid));
-  const localized = useMemo(() => findLocalizedFields(file, chosen), [file, chosen.length, picked]); // eslint-disable-line react-hooks/exhaustive-deps
+  const deps = useMemo(
+    () => (includeDeps ? findDependencies(file, chosen, { depth, index }) : { records: [] as EspRecord[], truncated: false }),
+    [file, index, includeDeps, depth, picked], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const chosenDeps = deps.records.filter((r) => !skipped.has(r.uid));
+  const all = [...chosen, ...chosenDeps];
+  const localized = useMemo(() => findLocalizedFields(file, all), [file, all.length, picked, skipped, includeDeps, depth]); // eslint-disable-line react-hooks/exhaustive-deps
+  const plan = useMemo(() => (dest === "patch" && patch ? planMasters(patch.file, file, sourceName.trim()) : null), [dest, patch, file, sourceName]);
 
   function toggle(r: EspRecord, on: boolean) {
     const next = new Set(picked);
@@ -53,19 +76,64 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
     setStatus(null);
   }
 
+  function toggleDep(r: EspRecord, on: boolean) {
+    const next = new Set(skipped);
+    if (on) next.delete(r.uid);
+    else next.add(r.uid);
+    setSkipped(next);
+    setStatus(null);
+  }
+
+  async function choosePatch(f: File) {
+    setStatus(null);
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      setPatch({ name: f.name, bytes, file: parseEsp(bytes, f.name) });
+    } catch (e) {
+      setPatch(null);
+      setStatus({ ok: false, message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   async function run() {
     setBusy(true);
     setStatus(null);
     try {
-      const name = /\.(esp)$/i.test(outName.trim()) ? outName.trim() : `${outName.trim().replace(/\.(esm|esl)$/i, "")}.esp`;
-      const bytes = extractPlugin(file, chosen, {
-        sourceName,
-        text: new Map(Object.entries(text)),
-      });
+      const options = { sourceName, text: new Map(Object.entries(text)) };
+      let bytes: Uint8Array;
+      let name: string;
+      let summary: string;
+      if (dest === "patch") {
+        if (!patch) throw new Error("Choose the patch plugin first.");
+        // parsed afresh, so running again never merges into an already-changed copy
+        const result = mergeIntoPlugin(parseEsp(patch.bytes, patch.name), file, all, { ...options, weak: chosenDeps });
+        bytes = result.bytes;
+        name = patch.name;
+        summary =
+          `Added ${result.added}, replaced ${result.replaced}` +
+          `${result.kept ? `, kept ${result.kept} the patch already had` : ""}` +
+          `${result.mastersAdded.length ? `. ${result.mastersAdded.join(", ")} was added to its masters` : ""}`;
+      } else {
+        const fileName = /\.(esp)$/i.test(outName.trim()) ? outName.trim() : `${outName.trim().replace(/\.(esm|esl)$/i, "")}.esp`;
+        bytes = extractPlugin(file, all, options);
+        name = fileName;
+        summary = `${all.length} record${all.length === 1 ? "" : "s"}`;
+        if (isSe && asLe) {
+          const le = convertToLe(parseEsp(bytes, name));
+          bytes = le.bytes;
+          summary += ", Legendary Edition format";
+          if (le.report.warnings.length > 0) summary += `. Check: ${le.report.warnings.join(" ")}`;
+        }
+      }
       const savedTo = await downloadPlugin(bytes, name);
+      const renamed = !!savedTo && !savedTo.toLowerCase().endsWith(`/${name.toLowerCase()}`);
       setStatus({
         ok: true,
-        message: `${savedTo ? `Saved to ${savedTo}` : `${name} was handed to your device`} (${chosen.length} record${chosen.length === 1 ? "" : "s"}, ${(bytes.length / 1024).toFixed(1)} KB).${savedTo ? "" : " This app cannot confirm where it was saved."} Put it in Skyrim's Data folder and enable it after ${sourceName} in your load order.`,
+        message:
+          `${savedTo ? `Saved to ${savedTo}` : `${name} was handed to your device`} (${summary}; ${(bytes.length / 1024).toFixed(1)} KB).` +
+          `${savedTo ? "" : " This app cannot confirm where it was saved."}` +
+          `${dest === "patch" && renamed ? ` A file named ${name} already existed and is never overwritten, so replace the old one with this copy.` : ""}` +
+          ` Put it in Skyrim's Data folder and enable it after ${sourceName} in your load order.`,
       });
     } catch (e) {
       setStatus({ ok: false, message: e instanceof Error ? e.message : String(e) });
@@ -74,11 +142,14 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
     }
   }
 
+  const blocked = busy || chosen.length === 0 || (dest === "patch" && (!patch || plan?.ok === false));
+  const total = all.length;
+
   return (
     <>
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
-          <PackageOpen className="size-5" /> Extract changes as a new plugin
+          <PackageOpen className="size-5" /> Extract changes as a plugin
         </DialogTitle>
         <DialogDescription>
           Saves only the records below into a small .esp that overrides them in {sourceName || "the source plugin"}, like a mod. The
@@ -105,9 +176,140 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
         </ul>
       )}
 
+      {candidates.length > 0 && (
+        <div className="space-y-2 rounded-md border p-3 text-sm">
+          <div className="flex items-start gap-3">
+            <Checkbox
+              id="ex-deps"
+              className="mt-0.5"
+              checked={includeDeps}
+              onCheckedChange={(v) => {
+                setIncludeDeps(v === true);
+                setSkipped(new Set());
+                setStatus(null);
+              }}
+            />
+            <label htmlFor="ex-deps" className="min-w-0 flex-1 cursor-pointer">
+              <span className="font-medium">Also include records these depend on</span>
+              <span className="block text-xs text-muted-foreground">
+                Copies the records of {sourceName || "the source"} that your chosen records point at (keywords, sounds, effects...), unchanged.
+                Copies of untouched records can clash with other mods that change them, so use this only when you need them.
+              </span>
+            </label>
+          </div>
+          {includeDeps && (
+            <>
+              <div className="flex items-center gap-2 text-xs">
+                <label htmlFor="ex-depth" className="text-muted-foreground">Follow</label>
+                <select
+                  id="ex-depth"
+                  value={depth}
+                  onChange={(e) => {
+                    setDepth(Number(e.target.value));
+                    setSkipped(new Set());
+                  }}
+                  className="h-8 rounded-md border bg-background px-2"
+                >
+                  <option value={1}>direct references only</option>
+                  <option value={2}>two levels of references</option>
+                  <option value={3}>three levels of references</option>
+                </select>
+              </div>
+              {deps.records.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Nothing found. The chosen records point only at records in other plugins, or at fields the editor cannot read.
+                </p>
+              ) : (
+                <>
+                  <ul className="max-h-40 divide-y overflow-auto rounded-md border">
+                    {deps.records.map((r) => (
+                      <li key={r.uid} className="flex items-center gap-3 px-3 py-1.5">
+                        <Checkbox id={`dep-${r.uid}`} checked={!skipped.has(r.uid)} onCheckedChange={(v) => toggleDep(r, v === true)} />
+                        <label htmlFor={`dep-${r.uid}`} className="min-w-0 flex-1 cursor-pointer truncate font-mono text-xs">
+                          {label(r)}
+                        </label>
+                        <span className="text-xs text-muted-foreground">{r.dirty ? "edited" : "dependency"}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {deps.truncated && <p className="text-xs text-destructive">Stopped at {deps.records.length} records. Follow fewer levels to see them all.</p>}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-2 rounded-md border p-3 text-sm">
+        <p className="font-medium">Save into</p>
+        <RadioGroup
+          value={dest}
+          onValueChange={(v) => {
+            setDest(v as "new" | "patch");
+            setStatus(null);
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <RadioGroupItem value="new" id="ex-dest-new" />
+            <label htmlFor="ex-dest-new" className="cursor-pointer">A new plugin</label>
+          </div>
+          <div className="flex items-center gap-2">
+            <RadioGroupItem value="patch" id="ex-dest-patch" />
+            <label htmlFor="ex-dest-patch" className="cursor-pointer">An existing patch plugin</label>
+          </div>
+        </RadioGroup>
+        {dest === "patch" && (
+          <div className="space-y-2">
+            <input
+              ref={patchInput}
+              type="file"
+              accept=".esp,application/octet-stream"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void choosePatch(f);
+                e.target.value = "";
+              }}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => patchInput.current?.click()}>
+                {patch ? "Choose another patch" : "Choose patch plugin"}
+              </Button>
+              {patch && <span className="min-w-0 truncate font-mono text-xs">{patch.name}</span>}
+            </div>
+            {plan?.ok === false && (
+              <p role="alert" className="text-xs text-destructive">
+                {plan.reason}
+              </p>
+            )}
+            {plan?.ok === true && (
+              <p className="text-xs text-muted-foreground">
+                Records with the same FormID in the patch are replaced
+                {plan.add.length ? `, and ${plan.add.join(", ")} is added to its masters` : ""}. The patch you pick is not changed; the result is saved as a copy.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-sm">
-        <label htmlFor="ex-out" className="text-muted-foreground">New file name</label>
-        <Input id="ex-out" value={outName} onChange={(e) => setOutName(e.target.value)} className="h-8 font-mono text-xs" />
+        {dest === "new" && isSe && (
+          <label className="col-span-2 flex items-start gap-2">
+            <Checkbox checked={asLe} onCheckedChange={(v) => setAsLe(v === true)} className="mt-0.5" />
+            <span>
+              Save in Legendary Edition format
+              <span className="block text-xs text-muted-foreground">
+                {file.name} is a Special Edition plugin. This sets the LE header and form versions (see To LE). Records are not otherwise changed.
+              </span>
+            </span>
+          </label>
+        )}
+        {dest === "new" && (
+          <>
+            <label htmlFor="ex-out" className="text-muted-foreground">New file name</label>
+            <Input id="ex-out" value={outName} onChange={(e) => setOutName(e.target.value)} className="h-8 font-mono text-xs" />
+          </>
+        )}
         <label htmlFor="ex-src" className="text-muted-foreground">Source plugin</label>
         <Input id="ex-src" value={sourceName} onChange={(e) => setSourceName(e.target.value)} className="h-8 font-mono text-xs" />
       </div>
@@ -145,8 +347,13 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
         </p>
       )}
 
-      <Button onClick={run} disabled={busy || chosen.length === 0}>
-        <PackageOpen /> {busy ? "Building…" : `Extract ${chosen.length} record${chosen.length === 1 ? "" : "s"} to .esp`}
+      <Button onClick={run} disabled={blocked}>
+        <PackageOpen />{" "}
+        {busy
+          ? "Building…"
+          : dest === "patch"
+            ? `Add ${total} record${total === 1 ? "" : "s"} to patch`
+            : `Extract ${total} record${total === 1 ? "" : "s"} to .esp`}
       </Button>
     </>
   );

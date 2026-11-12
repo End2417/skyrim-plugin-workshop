@@ -1,9 +1,11 @@
 import { Capacitor } from "@capacitor/core";
+import { usableSaveFolder, getSaveFolder, writeToFolder } from "../native/espFiles";
 
 // Browsers cannot report whether an anchor download reached storage, and the Capacitor
 // WebView ignores blob downloads entirely. In the Android app the file is written straight
-// to Documents/ESP Editor (a completed write is confirmed). If Android refuses that, it
-// falls back to the share sheet, which cannot confirm a save.
+// to the folder the person chose (see native/espFiles.ts) or, by default, Documents/ESP Editor
+// (a completed write is confirmed). If Android refuses that, it falls back to the share sheet,
+// which cannot confirm a save.
 const CHUNK = 3 * 1024 * 1024; // multiple of 3 so each base64 chunk is self-contained
 
 function toBase64(bytes: Uint8Array): string {
@@ -51,6 +53,20 @@ async function existingNames(fs: typeof import("@capacitor/filesystem")): Promis
 async function saveNative(bytes: Uint8Array, filename: string): Promise<string | void> {
   const fs = await import("@capacitor/filesystem");
   const safeName = filename.replace(/[\\/:*?"<>|]/g, "_") || "plugin.esp";
+  if (getSaveFolder()) {
+    // The person picked a folder: use it. If Android no longer allows that, say so and use the default folder.
+    const folder = await usableSaveFolder();
+    if (folder) {
+      try {
+        const name = await writeToFolder(folder, safeName, bytes);
+        return `${folder.name}/${name}`;
+      } catch (e) {
+        await notify(`Could not save to ${folder.name} (${e instanceof Error ? e.message : String(e)}). Using Documents/${FOLDER} instead.`);
+      }
+    } else {
+      await notify(`Your chosen save folder is no longer available. Using Documents/${FOLDER} instead.`);
+    }
+  }
   const taken = await existingNames(fs);
   for (let n = 0; n < 50; n++) {
     const candidate = numbered(safeName, n);

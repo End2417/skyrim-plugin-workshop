@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Download, FolderOpen, Info, ListChecks, PackageOpen, Search, X } from "lucide-react";
+import { AlertCircle, ArrowLeftRight, Download, FolderCog, FolderOpen, Info, ListChecks, PackageOpen, Search, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DecodeContext } from "@/lib/esp/decode";
 import { downloadPlugin } from "@/lib/esp/download";
+import { onFileOpened, readOpenedFile, takePendingFile, type OpenedFile } from "@/lib/native/espFiles";
 import { buildSearchIndex, searchIndex, type SearchIndex } from "@/lib/esp/search";
 import { applyDraft, clearDraft, fileSignature, loadDraft, makeDraft, saveDraft, type Draft } from "@/lib/esp/draft";
 import {
@@ -33,9 +34,13 @@ import {
 } from "@/lib/esp/format";
 import { AboutDialog, useFirstLaunchAbout } from "./AboutDialog";
 import { ChangesDialog } from "./ChangesDialog";
+import { CheckDialog } from "./CheckDialog";
+import { ConvertDialog } from "./ConvertDialog";
+import { detectEdition } from "@/lib/esp/convert";
 import { ExtractDialog } from "./ExtractDialog";
 import { RecordRow, RecordTree, TREE_COLS } from "./RecordTree";
 import { RecordView } from "./RecordView";
+import { SaveFolderDialog, saveFolderSupported } from "./SaveFolderDialog";
 
 const MAX_RESULTS = 500;
 /** Rows drawn at once; the rest are one tap away, so a broad search stays quick to show. */
@@ -49,6 +54,10 @@ export function EspEditor() {
   const [saveFeedback, setSaveFeedback] = useState<{ failed: boolean; filename: string; detail?: string; savedTo?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
+  const [checkOpen, setCheckOpen] = useState(false);
+  const [convertOpen, setConvertOpen] = useState(false);
+  const [folderOpen, setFolderOpen] = useState(false);
+  const [native, setNative] = useState(false); // known only on the device, so set after the first render
   const searchIndexRef = useRef<SearchIndex | null>(null);
   const [indexedFile, setIndexedFile] = useState<EspFile | null>(null);
   const [shown, setShown] = useState(PAGE_SIZE);
@@ -74,6 +83,9 @@ export function EspEditor() {
   const index = useMemo(() => (file ? buildFormIdIndex(file) : new Map<number, EspRecord>()), [file, indexRev]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const info = useMemo(() => (file ? fileInfo(file) : { localized: false, masters: [] }), [file, rev]);
+
+  // Read once per opened file: it only looks at record headers, so it is cheap, but it need not rerun on every edit.
+  const edition = useMemo(() => (file ? detectEdition(file).edition : null), [file]);
 
   const ctx: DecodeContext = {
     localized: info.localized,
@@ -167,13 +179,17 @@ export function EspEditor() {
   }
 
   async function openFile(f: File) {
+    await openBytes(async () => new Uint8Array(await f.arrayBuffer()), f.name);
+  }
+
+  async function openBytes(load: () => Promise<Uint8Array>, name: string) {
     setLoading(true);
     setError(null);
     setSaveFeedback(null);
     try {
-      const bytes = new Uint8Array(await f.arrayBuffer());
-      const parsed = parseEsp(bytes, f.name);
-      sigRef.current = fileSignature(f.name, bytes.length);
+      const bytes = await load();
+      const parsed = parseEsp(bytes, name);
+      sigRef.current = fileSignature(name, bytes.length);
       setPendingDraft(loadDraft(sigRef.current));
       setDraftNote(null);
       stringPartsRef.current = new Map();
@@ -313,6 +329,32 @@ export function EspEditor() {
   const pendingDraftRef = useRef(pendingDraft);
   pendingDraftRef.current = pendingDraft;
 
+  // "Open with": a plugin tapped in the Files app arrives here, both at launch and while the app is running.
+  const openBytesRef = useRef(openBytes);
+  openBytesRef.current = openBytes;
+  const modifiedRef = useRef(modified);
+  modifiedRef.current = modified;
+  useEffect(() => {
+    setNative(saveFolderSupported());
+    let dead = false;
+    let stop: (() => void) | undefined;
+    const open = async (f: OpenedFile) => {
+      if (modifiedRef.current) saveNowRef.current(); // keep a draft of the file being replaced
+      await openBytesRef.current(() => readOpenedFile(f), f.name);
+    };
+    void (async () => {
+      const first = await takePendingFile();
+      if (first && !dead) await open(first);
+      const off = await onFileOpened((f) => void open(f));
+      if (dead) off();
+      else stop = off;
+    })();
+    return () => {
+      dead = true;
+      stop?.();
+    };
+  }, []);
+
   const preparingSearch = !!file && filterEdid.trim() !== "" && indexedFile !== file;
 
   const breadcrumb: string[] = [];
@@ -330,6 +372,7 @@ export function EspEditor() {
         {file && (
           <span className="truncate font-mono text-xs text-muted-foreground">
             {countRecords(file.nodes).toLocaleString()} records
+            {edition === "SE" && " · Special Edition plugin"}
             {info.masters.length > 0 && ` · masters: ${info.masters.join(", ")}`}
             {modified && <span className="ml-2 text-modified">● unsaved changes</span>}
             {draftNote && <span className="ml-2">· {draftNote}</span>}
@@ -342,6 +385,14 @@ export function EspEditor() {
           <Button variant="ghost" size="icon" className="size-8" onClick={() => setChangesOpen(true)} disabled={!file} aria-label="Review your changes" title="Review your changes">
             <ListChecks />
           </Button>
+          <Button variant="ghost" size="icon" className="size-8" onClick={() => setCheckOpen(true)} disabled={!file} aria-label="Check plugin" title="Check for missing masters and records">
+            <ShieldCheck />
+          </Button>
+          {native && (
+            <Button variant="ghost" size="icon" className="size-8" onClick={() => setFolderOpen(true)} aria-label="Save folder" title="Choose where files are saved">
+              <FolderCog />
+            </Button>
+          )}
           <input
             ref={inputRef}
             type="file"
@@ -355,6 +406,9 @@ export function EspEditor() {
           />
           <Button variant="secondary" size="sm" onClick={() => inputRef.current?.click()} disabled={loading}>
             <FolderOpen /> {loading ? "Opening…" : "Open"}
+          </Button>
+          <Button variant={edition === "SE" ? "default" : "secondary"} size="sm" onClick={() => setConvertOpen(true)} disabled={!file} title="Make a Legendary Edition copy of a Special Edition plugin">
+            <ArrowLeftRight /> To LE
           </Button>
           <Button variant="secondary" size="sm" onClick={() => setExtractOpen(true)} disabled={!file} title="Save only the records you changed as a new plugin">
             <PackageOpen /> Extract
@@ -570,6 +624,9 @@ export function EspEditor() {
         <ChangesDialog open={changesOpen} onOpenChange={setChangesOpen} file={file} ctx={ctx} rev={rev} onRevert={revert} onGoTo={(r) => select(r, true)} />
       )}
       {file && <ExtractDialog open={extractOpen} onOpenChange={setExtractOpen} file={file} selected={selected} />}
+      {file && <ConvertDialog open={convertOpen} onOpenChange={setConvertOpen} file={file} />}
+      {file && <CheckDialog open={checkOpen} onOpenChange={setCheckOpen} file={file} onGoTo={(r) => select(r, true)} />}
+      <SaveFolderDialog open={folderOpen} onOpenChange={setFolderOpen} />
     </div>
   );
 }

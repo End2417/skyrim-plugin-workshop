@@ -3,10 +3,12 @@
 // UI-free so it stays testable.
 import { findSubDef } from "./defs";
 import {
+  buildFormIdIndex,
   encodeZString,
   fileInfo,
   getEditorId,
   getSubrecords,
+  markDirty,
   serializeEsp,
   walkRecords,
   type EspFile,
@@ -15,6 +17,7 @@ import {
   type EspRecord,
   type Subrecord,
 } from "./format";
+import { forEachFormIdRef } from "./refs";
 import { lookupString } from "./strings";
 
 const FLAG_ESM = 0x00000001;
@@ -145,13 +148,21 @@ function rewriteLocalized(file: EspFile, records: EspRecord[], opts: ExtractOpti
   return out;
 }
 
-export function extractPlugin(file: EspFile, records: EspRecord[], opts: ExtractOptions = {}): Uint8Array {
+/** Records, in file order and original group nesting, ready to write into a plugin. */
+interface ExtractTree {
+  nodes: EspNode[];
+  recordCount: number;
+  groupCount: number;
+  /** Clones of records that were only pulled in to make others valid (owners, dependencies). */
+  weak: Set<EspRecord>;
+}
+
+function buildTree(file: EspFile, records: EspRecord[], opts: ExtractOptions, weakRecords: EspRecord[] = []): ExtractTree {
   const picked = records.filter((r) => r.type !== "TES4");
   if (picked.length === 0) throw new Error("Select at least one record to extract.");
-  const sourceName = (opts.sourceName ?? file.name).trim();
-  if (!sourceName) throw new Error("Enter the name of the plugin these records come from.");
 
   const included = new Set<EspRecord>(picked);
+  const weakSource = new Set<EspRecord>(weakRecords);
   // Records inside a cell / worldspace / topic need that owner record present in the new file.
   const byId = new Map<number, EspRecord>();
   for (const r of walkRecords(file.nodes)) byId.set(r.formId >>> 0, r);
@@ -161,6 +172,7 @@ export function extractPlugin(file: EspFile, records: EspRecord[], opts: Extract
       const owner = id === null ? undefined : byId.get(id);
       if (owner && !included.has(owner)) {
         included.add(owner);
+        weakSource.add(owner);
         addOwners(owner);
       }
     }
@@ -170,12 +182,19 @@ export function extractPlugin(file: EspFile, records: EspRecord[], opts: Extract
   const rewritten = rewriteLocalized(file, picked, opts);
 
   let groupCount = 0;
+  let recordCount = 0;
+  const weak = new Set<EspRecord>();
   // Keep the original order and group nesting, dropping everything not selected.
   const prune = (nodes: EspNode[], parent: EspGroup | null): EspNode[] => {
     const out: EspNode[] = [];
     for (const n of nodes) {
       if (n.kind === "record") {
-        if (included.has(n)) out.push(cloneRecord(n, parent, rewritten.get(n)));
+        if (included.has(n)) {
+          const clone = cloneRecord(n, parent, rewritten.get(n));
+          if (weakSource.has(n)) weak.add(clone);
+          recordCount++;
+          out.push(clone);
+        }
       } else {
         const g: EspGroup = { ...n, parent, children: [] };
         g.children = prune(n.children, g);
@@ -187,8 +206,199 @@ export function extractPlugin(file: EspFile, records: EspRecord[], opts: Extract
     }
     return out;
   };
-  const body = prune(file.nodes.slice(1), null);
+  const nodes = prune(file.nodes.slice(1), null);
+  return { nodes, recordCount, groupCount, weak };
+}
 
-  const header = buildHeader(file, sourceName, included.size + groupCount, opts.author ?? "Skyrim ESP Editor");
-  return serializeEsp({ name: "extract.esp", nodes: [header, ...body] });
+export function extractPlugin(file: EspFile, records: EspRecord[], opts: ExtractOptions = {}): Uint8Array {
+  const sourceName = (opts.sourceName ?? file.name).trim();
+  if (!sourceName) throw new Error("Enter the name of the plugin these records come from.");
+  const tree = buildTree(file, records, opts);
+  const header = buildHeader(file, sourceName, tree.recordCount + tree.groupCount, opts.author ?? "Skyrim ESP Editor");
+  return serializeEsp({ name: "extract.esp", nodes: [header, ...tree.nodes] });
+}
+
+// ---------- records a change depends on ----------
+
+export interface DependencyOptions {
+  /** How many steps of references to follow (1 = only what the chosen records point at). Default 1. */
+  depth?: number;
+  /** Stop adding after this many records. Default 500. */
+  limit?: number;
+  /** FormID index of the file, when the caller already has one. */
+  index?: Map<number, EspRecord>;
+}
+
+export interface DependencyResult {
+  records: EspRecord[];
+  /** True when the limit cut the search short. */
+  truncated: boolean;
+}
+
+/**
+ * Records of the same plugin that `roots` point at (keywords, sounds, items, ...), following references
+ * `depth` steps. References into other plugins are not followed, since those records are not in this file.
+ * Only fields the editor has layouts for are inspected.
+ */
+export function findDependencies(file: EspFile, roots: EspRecord[], opts: DependencyOptions = {}): DependencyResult {
+  const depth = Math.max(1, opts.depth ?? 1);
+  const limit = opts.limit ?? 500;
+  const index = opts.index ?? buildFormIdIndex(file);
+  const localized = fileInfo(file).localized;
+  const seen = new Set<EspRecord>(roots);
+  const found: EspRecord[] = [];
+  let truncated = false;
+  let frontier = roots;
+  for (let step = 0; step < depth && frontier.length > 0 && !truncated; step++) {
+    const next: EspRecord[] = [];
+    for (const r of frontier) {
+      if (r.type === "TES4") continue;
+      forEachFormIdRef(r, localized, ({ id }) => {
+        const target = index.get(id >>> 0);
+        if (!target || target.type === "TES4" || seen.has(target)) return;
+        if (found.length >= limit) {
+          truncated = true;
+          return;
+        }
+        seen.add(target);
+        found.push(target);
+        next.push(target);
+      });
+    }
+    frontier = next;
+  }
+  return { records: found, truncated };
+}
+
+// ---------- adding records to an existing patch plugin ----------
+
+export type MasterPlan = { ok: true; add: string[] } | { ok: false; reason: string };
+
+const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/**
+ * Whether records of `source` can be copied into `target` without renumbering any FormID.
+ * FormIDs start with the slot of a plugin in the master list, so the patch must list the source's
+ * masters, then the source itself, in the same slots. Missing ones at the end can be appended,
+ * provided the patch has no records of its own (those use the slot right after the last master).
+ */
+export function planMasters(target: EspFile, source: EspFile, sourceName: string): MasterPlan {
+  const t = fileInfo(target);
+  if (t.localized) {
+    return { ok: false, reason: "This patch is a localized plugin, which stores text in string tables. Pick a plain .esp." };
+  }
+  const expected = [...fileInfo(source).masters, sourceName];
+  const have = t.masters;
+  const common = Math.min(have.length, expected.length);
+  for (let i = 0; i < common; i++) {
+    if (!sameName(have[i]!, expected[i]!)) {
+      return {
+        ok: false,
+        reason: `Master slot ${i} is ${have[i]} in the patch but ${expected[i]} in the records you are adding, so their FormIDs would point at the wrong files. Renumbering FormIDs is not supported. Extract into a new plugin instead, or use a patch made from the same source.`,
+      };
+    }
+  }
+  if (have.length >= expected.length) return { ok: true, add: [] };
+  for (const r of walkRecords(target.nodes)) {
+    if (r.type !== "TES4" && r.formId >>> 24 >= have.length) {
+      return {
+        ok: false,
+        reason: `The patch has records of its own, and adding ${expected.slice(have.length).join(", ")} to its master list would shift their FormIDs. Renumbering is not supported.`,
+      };
+    }
+  }
+  return { ok: true, add: expected.slice(have.length) };
+}
+
+export interface MergeOptions extends ExtractOptions {
+  /** Records copied only if the patch lacks them, e.g. dependencies, so edits already in the patch are kept. */
+  weak?: EspRecord[];
+  /** Replace a record the patch already has with the same FormID. Default true. */
+  replaceExisting?: boolean;
+}
+
+export interface MergeResult {
+  bytes: Uint8Array;
+  added: number;
+  replaced: number;
+  /** Records skipped because the patch already had them (kept as they were). */
+  kept: number;
+  mastersAdded: string[];
+}
+
+const sameLabel = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+function countNodes(nodes: EspNode[]): number {
+  let c = 0;
+  for (const n of nodes) c += n.kind === "record" ? 1 : 1 + countNodes(n.children);
+  return c;
+}
+
+/**
+ * Copies `records` of `source` into `target` (a parsed existing patch), replacing same-FormID records,
+ * appends any missing master and fixes the header's record count. Mutates `target`; parse it afresh per call.
+ */
+export function mergeIntoPlugin(target: EspFile, source: EspFile, records: EspRecord[], opts: MergeOptions = {}): MergeResult {
+  const sourceName = (opts.sourceName ?? source.name).trim();
+  if (!sourceName) throw new Error("Enter the name of the plugin these records come from.");
+  const plan = planMasters(target, source, sourceName);
+  if (!plan.ok) throw new Error(plan.reason);
+
+  const tree = buildTree(source, records, opts, opts.weak);
+  const replaceExisting = opts.replaceExisting ?? true;
+  const stats = { added: 0, replaced: 0, kept: 0 };
+
+  const mergeInto = (dest: EspNode[], parent: EspGroup | null, incoming: EspNode[]) => {
+    for (const n of incoming) {
+      if (n.kind === "group") {
+        const match = dest.find((d): d is EspGroup => d.kind === "group" && d.groupType === n.groupType && sameLabel(d.label, n.label));
+        if (match) {
+          mergeInto(match.children, match, n.children);
+        } else {
+          n.parent = parent;
+          dest.push(n);
+          stats.added += countRecordsIn(n);
+        }
+        continue;
+      }
+      const at = dest.findIndex((d) => d.kind === "record" && d.type === n.type && d.formId >>> 0 === n.formId >>> 0);
+      n.parent = parent;
+      if (at < 0) {
+        dest.push(n);
+        stats.added++;
+      } else if (replaceExisting && !tree.weak.has(n)) {
+        dest[at] = n;
+        stats.replaced++;
+      } else {
+        stats.kept++;
+      }
+    }
+  };
+  mergeInto(target.nodes, null, tree.nodes); // slot 0 is the TES4 header, which no incoming record matches
+
+  const tes4 = target.nodes[0] as EspRecord;
+  markDirty(tes4);
+  const subs = getSubrecords(tes4);
+  if (plan.add.length > 0) {
+    let at = subs.map((s) => s.type).lastIndexOf("MAST");
+    if (at >= 0) at += subs[at + 1]?.type === "DATA" ? 2 : 1;
+    else at = subs.filter((s) => ["HEDR", "CNAM", "SNAM"].includes(s.type)).length;
+    const pairs: Subrecord[] = plan.add.flatMap((name) => [
+      { type: "MAST", data: encodeZString(name) },
+      { type: "DATA", data: new Uint8Array(8) },
+    ]);
+    subs.splice(at, 0, ...pairs);
+  }
+  const hedr = subs.find((s) => s.type === "HEDR");
+  if (hedr && hedr.data.length >= 8) {
+    new DataView(hedr.data.buffer, hedr.data.byteOffset, hedr.data.byteLength).setInt32(4, countNodes(target.nodes.slice(1)), true);
+  }
+
+  return { bytes: serializeEsp(target), ...stats, mastersAdded: plan.add };
+}
+
+function countRecordsIn(g: EspGroup): number {
+  let c = 0;
+  for (const n of g.children) c += n.kind === "record" ? 1 : countRecordsIn(n);
+  return c;
 }

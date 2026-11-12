@@ -191,6 +191,46 @@ function decodeField(def: FieldDef, data: Uint8Array, o: number, ctx: DecodeCont
   return { node: { label: def.n, display: displayLeaf(def, data, leaf, ctx), leaf }, size };
 }
 
+/**
+ * Calls `visit` for every FormID field (typed `fid` fields only, not hex parameters) in a subrecord.
+ * Mirrors decodeField's sizing but builds no display nodes, so it stays cheap on whole plugins.
+ * Returns the bytes consumed, or null when the data ends before the field.
+ */
+export function visitFormIds(def: FieldDef, data: Uint8Array, o: number, localized: boolean, visit: (id: number, field: string) => void): number | null {
+  const remaining = data.length - o;
+  if (def.k === "struct") {
+    let p = o;
+    for (const m of def.m) {
+      const r = visitFormIds(m, data, p, localized, visit);
+      if (r === null) break;
+      p += r;
+    }
+    if (p === o && def.m.length) return null;
+    return p - o;
+  }
+  if (def.k === "array") {
+    let p = o;
+    while (p < data.length) {
+      const r = visitFormIds(def.of, data, p, localized, visit);
+      if (r === null || r === 0) break;
+      p += r;
+    }
+    return p - o;
+  }
+  let size: number;
+  if (def.k === "str" || (def.k === "lstr" && !localized)) {
+    const z = data.indexOf(0, o);
+    size = z < 0 ? remaining : z - o + 1;
+  } else if (def.k === "bytes" && !def.size) {
+    size = remaining;
+  } else {
+    size = fixedSize(def, localized)!;
+  }
+  if (size > remaining || (remaining <= 0 && size > 0)) return null;
+  if (def.k === "fid") visit(new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(o, true), def.n);
+  return size;
+}
+
 export function subrecordLabel(recordSig: string, sub: Subrecord): string {
   const d = findSubDef(recordSig, sub.type);
   return d ? `${sub.type} - ${d.label}` : sub.type;
