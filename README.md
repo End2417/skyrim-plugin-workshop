@@ -2,7 +2,7 @@
 
 Open, edit and extract Skyrim Legendary Edition `.esp` / `.esm` plugin files (Special Edition plugins open too and can be converted to Legendary Edition) on your phone or in your browser. Change a record, such as a sword's damage, then save just that change as its own small `.esp` mod.
 
-**[Download the Android app](https://github.com/End2417/skyrim-plugin-workshop/releases/latest)** · **[Project website](https://end2417.github.io/skyrim-plugin-workshop/)** ·
+**[Download the Android app](https://github.com/End2417/skyrim-plugin-workshop/releases/latest)** · **[Project website](https://end2417.github.io/skyrim-plugin-workshop/)** 
 
 ## Features
 
