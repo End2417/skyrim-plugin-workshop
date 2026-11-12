@@ -1,0 +1,251 @@
+name: Import zip and build
+
+# Upload a project zip to the repository (the repo root or updates/, committed straight to main) and
+# this starts by itself. It extracts the zip,
+# copies the files into the repository (including docs/, the website), commits them,
+# then builds the Android app from the result.
+on:
+  push:
+    branches: [main, master]
+    paths: ["*.zip", "updates/*.zip"]
+  workflow_dispatch:
+    inputs:
+      zip_path:
+        description: "Zip to import, relative to the repo root (blank: the newest zip in updates/)"
+        type: string
+        default: ""
+      delete_removed:
+        description: "Delete repo files that are not in the zip (never touches .git, .github, updates, android)"
+        type: boolean
+        default: false
+      keep_zip:
+        description: "Keep the zip in the repository after importing it"
+        type: boolean
+        default: false
+      version:
+        description: "App version, for example 1.3.0 (blank: leave the build's default)"
+        type: string
+        default: ""
+      release:
+        description: "Create a GitHub release v<version> with the APK (needs a version)"
+        type: boolean
+        default: false
+      test_build:
+        description: "Test build: installs next to the normal app instead of updating it"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: import-zip-and-build
+  cancel-in-progress: false
+
+jobs:
+  import-and-build:
+    runs-on: ubuntu-latest
+    env:
+      # Empty values fall back to the normal app ID and name (see capacitor.config.ts).
+      CAP_APP_ID: ${{ inputs.test_build && 'app.lovable.skyrim_plugin_workshop.twa.test' || '' }}
+      CAP_APP_NAME: ${{ inputs.test_build && 'ESP Editor TEST' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE: ${{ inputs.release }}
+          TEST_BUILD: ${{ inputs.test_build }}
+          ZIP_INPUT: ${{ inputs.zip_path }}
+        run: |
+          set -euo pipefail
+          if [ -n "$VERSION" ] && ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
+            echo "::error::Version must look like 1.3.0"; exit 1
+          fi
+          if [ "$RELEASE" = true ] && [ -z "$VERSION" ]; then
+            echo "::error::Enter a version to create a release"; exit 1
+          fi
+          if [ "$RELEASE" = true ] && [ "$TEST_BUILD" = true ]; then
+            echo "::error::A test build cannot be released"; exit 1
+          fi
+          case "$ZIP_INPUT" in
+            /*|*..*) echo "::error::zip_path must be a path inside the repository"; exit 1 ;;
+          esac
+
+      - name: Find the zip
+        id: zip
+        env:
+          ZIP_INPUT: ${{ inputs.zip_path }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ZIP="$ZIP_INPUT"
+          if [ -z "$ZIP" ] && [ "$EVENT" = push ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            ZIP=$(git diff --name-only --diff-filter=AM "$BEFORE" "$SHA" -- '*.zip' | grep -E '^([^/]+|updates/[^/]+)\.zip$' | tail -n1 || true)
+          fi
+          if [ -z "$ZIP" ] && [ "$EVENT" = push ]; then
+            # A push that only deleted or removed a zip (for example you cleaning up) has nothing to import.
+            echo "No zip was added or changed in this push; nothing to do."
+            echo "found=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ -z "$ZIP" ]; then
+            ZIP=$(git log --diff-filter=AM --name-only --format= -- '*.zip' | grep -E '^([^/]+|updates/[^/]+)\.zip$' | head -n1 || true)
+          fi
+          if [ -z "$ZIP" ] || [ ! -f "$ZIP" ]; then
+            echo "::error::No zip found. Upload one to the repo root or updates/, or set zip_path."; exit 1
+          fi
+          echo "Importing $ZIP"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "path=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Extract
+        if: steps.zip.outputs.found == 'true'
+        id: extract
+        env:
+          ZIP: ${{ steps.zip.outputs.path }}
+        run: |
+          set -euo pipefail
+          DEST="$RUNNER_TEMP/import"
+          rm -rf "$DEST"; mkdir -p "$DEST"
+          unzip -q "$ZIP" -d "$DEST" -x '__MACOSX/*' '*/.DS_Store' '.DS_Store'
+          SRC="$DEST"
+          # A zip with one top-level folder (skyrim-plugin-workshop-main/) is used from inside that folder.
+          if [ "$(find "$SRC" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 ] && [ -d "$(find "$SRC" -mindepth 1 -maxdepth 1)" ]; then
+            SRC="$(find "$SRC" -mindepth 1 -maxdepth 1)"
+          fi
+          if [ ! -f "$SRC/package.json" ] || [ ! -d "$SRC/src" ]; then
+            echo "::error::The zip does not look like this project (no package.json and src/ at its top level)."; exit 1
+          fi
+          echo "src=$SRC" >> "$GITHUB_OUTPUT"
+          echo "Extracted $(find "$SRC" -type f | wc -l) files"
+
+      - name: Copy into the repository
+        if: steps.zip.outputs.found == 'true'
+        env:
+          SRC: ${{ steps.extract.outputs.src }}
+          DELETE: ${{ inputs.delete_removed }}
+        run: |
+          set -euo pipefail
+          command -v rsync >/dev/null || sudo apt-get install -y rsync
+          # .github is skipped because the default token cannot change workflow files;
+          # edit workflows in the repository directly. android/ is generated by the build.
+          EXCL=(--exclude=/.git/ --exclude=/.github/ --exclude=/updates/ --exclude=/android/ --exclude=node_modules/ --exclude=/dist/ --exclude=/.output/)
+          DEL=()
+          if [ "$DELETE" = true ]; then DEL=(--delete); fi
+          rsync -a "${DEL[@]}" "${EXCL[@]}" "$SRC"/ ./
+
+      - name: Commit and push
+        if: steps.zip.outputs.found == 'true'
+        env:
+          ZIP: ${{ steps.zip.outputs.path }}
+          KEEP: ${{ inputs.keep_zip }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$KEEP" != true ]; then git rm -q --ignore-unmatch -- "$ZIP"; fi
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The zip matches the repository already; nothing to commit."
+          else
+            git commit -q -m "Import $(basename "$ZIP")"
+            git push origin "HEAD:$BRANCH"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.zip.outputs.found == 'true'
+        with: { node-version: 22 }
+      - uses: oven-sh/setup-bun@v2
+        if: steps.zip.outputs.found == 'true'
+      - uses: actions/setup-java@v4
+        if: steps.zip.outputs.found == 'true'
+        with: { distribution: temurin, java-version: 21 }
+
+      - name: Install
+        if: steps.zip.outputs.found == 'true'
+        run: bun install
+
+      - name: Build static web app
+        if: steps.zip.outputs.found == 'true'
+        run: bun run build:android
+
+      - name: Locate built index.html
+        if: steps.zip.outputs.found == 'true'
+        run: |
+          IDX=$(find dist .output -name index.html -not -path "*/node_modules/*" 2>/dev/null | head -1)
+          if [ -z "$IDX" ]; then echo "No index.html produced. Build output:"; find dist .output -maxdepth 3 | head -50; exit 1; fi
+          echo "CAP_WEB_DIR=$(dirname "$IDX")" >> "$GITHUB_ENV"
+          echo "Using $(dirname "$IDX")"
+
+      - name: Create Android project
+        if: steps.zip.outputs.found == 'true'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y imagemagick
+          [ -d android ] || npx cap add android
+          # Open-with filters and the native plugin (open-with + save-folder picker)
+          node scripts/patch-android.mjs
+          # Launcher icon from the app's own maskable icon
+          RES=android/app/src/main/res
+          rm -rf $RES/mipmap-anydpi-v26
+          for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            convert public/icons/icon-maskable-512.png -resize ${d#*:}x${d#*:} $RES/mipmap-${d%:*}/ic_launcher.png
+            cp $RES/mipmap-${d%:*}/ic_launcher.png $RES/mipmap-${d%:*}/ic_launcher_round.png
+            cp $RES/mipmap-${d%:*}/ic_launcher.png $RES/mipmap-${d%:*}/ic_launcher_foreground.png
+          done
+          npx cap sync android
+          # Must be higher than the old TWA release on Play
+          sed -i "s/versionCode [0-9]*/versionCode ${{ github.run_number }}0/" android/app/build.gradle
+          if [ -n "$VERSION" ]; then
+            sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" android/app/build.gradle
+          fi
+
+      - name: Build release (unsigned)
+        if: steps.zip.outputs.found == 'true'
+        working-directory: android
+        run: ./gradlew assembleRelease bundleRelease
+
+      - name: Sign
+        if: steps.zip.outputs.found == 'true'
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          echo "$KS_B64" | base64 -d > signing.keystore
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          OUT=android/app/build/outputs
+          mkdir -p dist-out
+          $BT/zipalign -p 4 $OUT/apk/release/app-release-unsigned.apk aligned.apk
+          $BT/apksigner sign --ks signing.keystore --ks-key-alias "$KS_ALIAS" \
+            --ks-pass env:KS_PASS --key-pass env:KS_PASS \
+            --out dist-out/ESP-Editor${{ inputs.test_build && '-test' || '' }}.apk aligned.apk
+          jarsigner -keystore signing.keystore -storepass "$KS_PASS" -keypass "$KS_PASS" \
+            -sigalg SHA256withRSA -digestalg SHA-256 \
+            -signedjar dist-out/ESP-Editor${{ inputs.test_build && '-test' || '' }}.aab $OUT/bundle/release/app-release.aab "$KS_ALIAS"
+          rm signing.keystore
+
+      - uses: actions/upload-artifact@v4
+        if: steps.zip.outputs.found == 'true'
+        with:
+          name: ESP-Editor-android${{ inputs.test_build && '-test' || '' }}
+          path: dist-out/
+
+      - name: Create release
+        if: ${{ inputs.release && steps.zip.outputs.found == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          NOTES=(--generate-notes)
+          if [ -f RELEASE_NOTES.md ]; then NOTES=(--notes-file RELEASE_NOTES.md); fi
+          gh release create "v$VERSION" dist-out/ESP-Editor.apk "${NOTES[@]}" \
+            --title "ESP Editor $VERSION" --target "$(git rev-parse HEAD)"
