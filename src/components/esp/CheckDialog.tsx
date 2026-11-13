@@ -3,7 +3,8 @@ import { CircleAlert, CircleCheck, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { checkPlugin, localIds, type CheckReport, type IssueKind, type MasterIds } from "@/lib/esp/check";
-import { getEditorId, hex8, parseEsp, type EspFile, type EspRecord } from "@/lib/esp/format";
+import { fileInfo, getEditorId, hex8, parseEsp, type EspFile, type EspRecord } from "@/lib/esp/format";
+import { forgetMaster, listRememberedMasters, recallMasterIds, rememberMaster } from "@/lib/esp/masterStore";
 
 interface Props {
   open: boolean;
@@ -32,7 +33,7 @@ const KIND_LABEL: Record<IssueKind, string> = {
 const PAGE = 25;
 
 function CheckForm({ file, onGoTo, onOpenChange }: Props) {
-  const [masterFiles, setMasterFiles] = useState<{ name: string; count: number }[]>([]);
+  const [masterFiles, setMasterFiles] = useState<{ name: string; count: number; remembered: boolean }[]>([]);
   const idsRef = useRef<MasterIds>(new Map());
   const inputRef = useRef<HTMLInputElement>(null);
   const [report, setReport] = useState<CheckReport | null>(null);
@@ -44,6 +45,14 @@ function CheckForm({ file, onGoTo, onOpenChange }: Props) {
 
   useEffect(() => {
     cancelled.current = false;
+    // Master files added in an earlier session are still on this device
+    void listRememberedMasters().then((list) => {
+      if (cancelled.current) return;
+      setMasterFiles((prev) => [
+        ...prev,
+        ...list.filter((m) => !prev.some((p) => p.name.toLowerCase() === m.name.toLowerCase())).map((m) => ({ name: m.name, count: m.count, remembered: true })),
+      ]);
+    });
     return () => {
       cancelled.current = true;
     };
@@ -58,7 +67,8 @@ function CheckForm({ file, onGoTo, onOpenChange }: Props) {
         const parsed = parseEsp(new Uint8Array(await f.arrayBuffer()), f.name);
         const ids = localIds(parsed);
         idsRef.current.set(f.name.toLowerCase(), ids);
-        setMasterFiles((prev) => [...prev.filter((m) => m.name.toLowerCase() !== f.name.toLowerCase()), { name: f.name, count: ids.size }]);
+        const remembered = await rememberMaster(f.name, ids);
+        setMasterFiles((prev) => [...prev.filter((m) => m.name.toLowerCase() !== f.name.toLowerCase()), { name: f.name, count: ids.size, remembered }]);
       }
       setReport(null); // results no longer reflect the files supplied
     } catch (e) {
@@ -70,6 +80,7 @@ function CheckForm({ file, onGoTo, onOpenChange }: Props) {
 
   function removeMaster(name: string) {
     idsRef.current.delete(name.toLowerCase());
+    void forgetMaster(name);
     setMasterFiles((prev) => prev.filter((m) => m.name !== name));
     setReport(null);
   }
@@ -80,6 +91,12 @@ function CheckForm({ file, onGoTo, onOpenChange }: Props) {
     setReport(null);
     setShown(PAGE);
     try {
+      // Load the remembered masters this plugin lists (only those, since Skyrim.esm is big)
+      for (const name of fileInfo(file).masters) {
+        if (idsRef.current.has(name.toLowerCase())) continue;
+        const ids = await recallMasterIds(name);
+        if (ids) idsRef.current.set(name.toLowerCase(), ids);
+      }
       const result = await checkPlugin(file, { masterIds: idsRef.current }, () => cancelled.current);
       if (result) setReport(result);
     } catch (e) {
@@ -107,15 +124,16 @@ function CheckForm({ file, onGoTo, onOpenChange }: Props) {
         <p className="font-medium">Verify references into masters (optional)</p>
         <p className="text-xs text-muted-foreground">
           This app only has the plugin you opened, so it cannot tell whether a record in a master exists. Add the master files (for example
-          Skyrim.esm) to check references into them too. Large files take a while.
+          Skyrim.esm) to check references into them too. Large files take a while to read, but the app keeps what it needs on this device, so
+          you add each file once. Pick several at once from your Skyrim Data folder if you like.
         </p>
         {masterFiles.length > 0 && (
           <ul className="divide-y rounded-md border text-xs">
             {masterFiles.map((m) => (
               <li key={m.name} className="flex items-center gap-2 px-2 py-1.5">
                 <span className="min-w-0 flex-1 truncate font-mono">{m.name}</span>
-                <span className="text-muted-foreground">{m.count.toLocaleString()} records</span>
-                <button onClick={() => removeMaster(m.name)} aria-label={`Remove ${m.name}`}>
+                <span className="text-muted-foreground">{m.count.toLocaleString()} records{m.remembered ? " · kept" : ""}</span>
+                <button onClick={() => removeMaster(m.name)} aria-label={`Remove ${m.name}`} title="Remove and forget this file">
                   <X className="size-3.5" />
                 </button>
               </li>

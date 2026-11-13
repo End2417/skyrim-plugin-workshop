@@ -64,36 +64,16 @@ export const setActiveStrings = (t: StringTable | null) => void (active = t);
 export const getActiveStrings = () => active;
 export const lookupString = (id: number): string | null => active?.get(id) ?? null;
 
+import { STORE_STRINGS, withStore as withStoreIn } from "./db";
+
 // ---------- remembering the files between sessions (so you load them once) ----------
 export interface StoredStringsFile {
   name: string;
   bytes: Uint8Array;
 }
 
-const DB_NAME = "esp-editor";
-const STORE = "strings";
-
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function withStore<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-  const db = await openDb();
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const req = fn(db.transaction(STORE, mode).objectStore(STORE));
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  } finally {
-    db.close();
-  }
-}
+const STORE = STORE_STRINGS;
+const withStore = <T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>) => withStoreIn(STORE, mode, fn);
 
 /** Keeps the strings files for a plugin on this device. Never throws; returns false if storage refused. */
 export async function rememberStringFiles(plugin: string, files: StoredStringsFile[]): Promise<boolean> {
