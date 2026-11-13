@@ -2,7 +2,7 @@
 
 Open, edit and extract Skyrim Legendary Edition `.esp` / `.esm` plugin files (Special Edition plugins open too and can be converted to Legendary Edition) on your phone or in your browser. Change a record, such as a sword's damage, then save just that change as its own small `.esp` mod.
 
-**[Download the Android app](https://github.com/End2417/skyrim-plugin-workshop/releases/latest)** · **[Project website](https://end2417.github.io/skyrim-plugin-workshop/)** · **[Use in your browser](https://skyrim-plugin-workshop.lovable.app)**
+**[Download the Android app](https://github.com/End2417/skyrim-plugin-workshop/releases/latest)** · **[Project website](https://end2417.github.io/skyrim-plugin-workshop/)** · 
 
 ## Features
 
@@ -54,15 +54,6 @@ This project was created with the help of AI tools, including Lovable and Claude
 
 This is an unofficial fan tool and is not affiliated with Bethesda Softworks.
 
-## Updating from a zip
-
-The **Import zip and build** workflow (Actions tab) takes a project zip, extracts it, copies the files into the repository (website pages in `docs/` included), commits them, and builds the Android app.
-
-1. Upload the zip to the repository root or to `updates/`, committing straight to `main` (on GitHub: **Add file → Upload files**). The workflow starts as soon as the commit lands. Or start it by hand from the Actions tab and set `zip_path`. If you upload to a new branch or open a pull request instead, it starts once that is merged into `main`.
-2. Optional inputs: a version (for example `1.3.2`), whether to create a GitHub release with the APK, whether to delete repo files that are not in the zip, and whether to keep the zip afterwards.
-3. The APK and AAB are attached to the run as an artifact.
-
-The workflow does not copy `.github/` from the zip, because GitHub's built-in token may not change workflow files; edit workflows in the repository itself. It needs the same signing secrets as the normal build (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`) and a branch that allows pushes from GitHub Actions.
 
 ## Development
 
