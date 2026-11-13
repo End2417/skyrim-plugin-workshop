@@ -58,28 +58,7 @@ This project was created with the help of AI tools, including Lovable and Claude
 
 This is an unofficial fan tool and is not affiliated with Bethesda Softworks.
 
-## Updating from a zip
-
-The **Import zip and build** workflow (Actions tab) takes a project zip, extracts it, copies the files into the repository (website pages in `docs/` included), commits them, and builds the Android app.
-
-1. Upload the zip to the repository root or to `updates/`, committing straight to `main` (on GitHub: **Add file → Upload files**). The workflow starts as soon as the commit lands. Or start it by hand from the Actions tab and set `zip_path`. If you upload to a new branch or open a pull request instead, it starts once that is merged into `main`.
-2. Optional inputs: a version (for example `1.4.0`), whether to create a GitHub release with the APK, whether to delete repo files that are not in the zip, and whether to keep the zip afterwards.
-3. The APK and AAB are attached to the run as an artifact.
-
-The workflow does not copy `.github/` from the zip, because GitHub's built-in token may not change workflow files; edit workflows in the repository itself. It needs the same signing secrets as the normal build (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`) and a branch that allows pushes from GitHub Actions.
-
-## Trying changes in a separate repository
-
-The **Test build** workflow (`.github/workflows/test-build.yml`) builds the app as "ESP Editor TEST", with its own app ID, so it installs next to the normal app instead of replacing it. It uses Android's debug signing, so it needs no secrets.
-
-It is made for a spare repository where you can only upload single files:
-
-1. In the spare repository choose **Add file → Create new file**, type `.github/workflows/test-build.yml` as the name (typing the slashes creates the folders) and paste in the contents of that workflow file.
-2. Upload the project `.zip` to the repository root.
-3. The workflow extracts the zip and builds from it. It starts by itself when you upload or push, or from the **Actions** tab. Nothing is committed back to the repository.
-4. Download `ESP-Editor-test.apk` from the run's artifacts.
-
-If there is no zip, it builds the project files in the repository instead.
+instead.
 
 ## Development
 
