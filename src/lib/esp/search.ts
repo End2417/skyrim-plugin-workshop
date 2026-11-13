@@ -27,7 +27,7 @@ export function splitWords(text: string): string[] {
 }
 
 /** "bows" -> "bow", "arrows" -> "arrow", "boxes" -> "box". Short words are left alone. */
-function singular(term: string): string {
+export function singular(term: string): string {
   if (term.length > 4 && term.endsWith("ies")) return `${term.slice(0, -3)}y`;
   if (term.length > 4 && /(ches|shes|xes|sses)$/.test(term)) return term.slice(0, -2);
   if (term.length > 3 && term.endsWith("s") && !term.endsWith("ss")) return term.slice(0, -1);
@@ -37,7 +37,7 @@ function singular(term: string): string {
 // A term that looks like part of a FormID is matched against FormIDs, not words.
 const FORMID_TERM = /^(0x[0-9a-f]{1,8}|(?=[0-9a-f]*\d)[0-9a-f]{5,8})$/i;
 
-interface Term {
+export interface Term {
   forms: string[]; // the typed word and its singular, lower-cased
   formId: string | null; // upper-case hex when the term looks like a FormID
 }
@@ -55,13 +55,13 @@ export function parseQuery(query: string): Term[] {
 }
 
 // ---------- per-record-type facts, computed once ----------
-interface TypeInfo {
+export interface TypeInfo {
   sig: string; // "weap"
   label: string; // "weapon"
   words: string[]; // ["weapon"]
 }
 const typeInfos = new Map<string, TypeInfo>();
-function typeInfo(type: string): TypeInfo {
+export function typeInfo(type: string): TypeInfo {
   let t = typeInfos.get(type);
   if (!t) {
     const label = (SIGNATURE_NAMES[type] ?? "").toLowerCase();
@@ -78,7 +78,7 @@ function weaponWords(r: EspRecord): string[] {
 }
 
 /** How well one term matches a record: 0 = no match, higher is better. */
-function scoreTerm(term: Term, r: EspRecord, edidLower: string, edidWords: string[], nameWords: string[], nameLower: string, kind: string[], typeWords: string[]): number {
+export function scoreTerm(term: Term, r: { type: string; formId: number }, edidLower: string, edidWords: string[], nameWords: string[], nameLower: string, kind: string[], typeWords: string[]): number {
   let best = 0;
   if (term.formId && hex8(r.formId).includes(term.formId)) best = 100;
   for (const t of term.forms) {
@@ -237,4 +237,119 @@ export function searchPlugin(file: EspFile, query: string, limit = 500, localize
   const buckets: Buckets = new Map();
   for (let i = 0; i < index.records.length; i++) scanOne(index, i, terms, buckets, limit);
   return collect(buckets, limit);
+}
+
+// ---------- separate FormID / EditorID / Name filters ----------
+
+/** What was typed in each of the three filter boxes. Every box that has something in it must match. */
+export interface FieldQuery {
+  formId: string;
+  editorId: string;
+  name: string;
+}
+
+const MIN_FILTER = 2; // one character would match nearly everything
+
+/** Whether any box has enough typed in it to search. */
+export function hasFieldQuery(q: FieldQuery): boolean {
+  return [q.formId, q.editorId, q.name].some((t) => t.trim().length >= MIN_FILTER);
+}
+
+const fieldTerms = (text: string): string[][] =>
+  text
+    .trim()
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .map((raw) => {
+      const lower = raw.toLowerCase();
+      return [...new Set([lower, singular(lower)])];
+    });
+
+/** How well text matches every word typed in one box: 0 = no match. A whole word beats the start of a word beats a part of one. */
+function fieldScore(terms: string[][], text: string): number {
+  const lower = text.toLowerCase();
+  const words = splitWords(text);
+  let total = 0;
+  for (const forms of terms) {
+    let best = 0;
+    for (const t of forms) {
+      if (words.includes(t)) best = Math.max(best, 100);
+      else if (words.some((w) => w.startsWith(t))) best = Math.max(best, 40);
+      else if (lower.includes(t)) best = Math.max(best, 20);
+    }
+    if (best === 0) return 0;
+    total += best;
+  }
+  return total;
+}
+
+interface PreparedFields {
+  formId: string | null; // upper-case hex to look for inside the FormID
+  impossible: boolean; // the FormID box holds something that is not hex
+  edid: string[][] | null;
+  name: string[][] | null;
+}
+
+function prepareFields(q: FieldQuery): PreparedFields {
+  const id = q.formId.trim().replace(/^0x/i, "").toUpperCase();
+  const idActive = id.length >= MIN_FILTER;
+  return {
+    formId: idActive ? id : null,
+    impossible: idActive && !/^[0-9A-F]+$/.test(id),
+    edid: q.editorId.trim().length >= MIN_FILTER ? fieldTerms(q.editorId) : null,
+    name: q.name.trim().length >= MIN_FILTER ? fieldTerms(q.name) : null,
+  };
+}
+
+function scanFields(index: SearchIndex, i: number, f: PreparedFields, buckets: Buckets, limit: number) {
+  const r = index.records[i]!;
+  if (r.type === "TES4") return;
+  if (f.formId !== null && !hex8(r.formId).includes(f.formId)) return;
+  let total = 0;
+  if (f.edid || f.name) {
+    // Cheap rejection first: each word has to appear somewhere in the Editor ID or name text
+    const h = r.dirty ? hayOf(r, index.localized) : index.hay[i]!;
+    if (!h) return;
+    for (const terms of [f.edid, f.name]) {
+      if (terms && !terms.every((forms) => forms.some((t) => h.includes(t)))) return;
+    }
+    if (f.edid) {
+      const s = fieldScore(f.edid, getEditorId(r) ?? "");
+      if (s === 0) return;
+      total += s;
+    }
+    if (f.name) {
+      const s = fieldScore(f.name, getDisplayName(r, index.localized) ?? "");
+      if (s === 0) return;
+      total += s;
+    }
+  }
+  let bucket = buckets.get(total);
+  if (!bucket) buckets.set(total, (bucket = []));
+  if (bucket.length < limit) bucket.push(r);
+}
+
+/**
+ * Filters with three separate boxes, like TES5Edit: FormID (part of the hex ID), Editor ID and Name (each word typed must
+ * appear in that field only). Results are best matches first, then in file order. Runs in short slices so typing stays smooth;
+ * resolves to null if cancelled.
+ */
+export async function filterIndex(index: SearchIndex, query: FieldQuery, limit = 500, cancelled: () => boolean = () => false): Promise<EspRecord[] | null> {
+  if (!hasFieldQuery(query)) return [];
+  const f = prepareFields(query);
+  if (f.impossible) return [];
+  const buckets: Buckets = new Map();
+  const n = index.records.length;
+  let i = 0;
+  while (i < n) {
+    const start = now();
+    while (i < n && now() - start < SLICE_MS) {
+      for (const stop = Math.min(n, i + 256); i < stop; i++) scanFields(index, i, f, buckets, limit);
+    }
+    if (i < n) {
+      if (cancelled()) return null;
+      await tick();
+    }
+  }
+  return cancelled() ? null : collect(buckets, limit);
 }

@@ -1,13 +1,17 @@
    # Skyrim ESP Editor for Android
 
-Open, edit and extract Skyrim Legendary Edition `.esp` / `.esm` plugin files (Special Edition plugins open too and can be converted to Legendary Edition) on your phone or in your browser. Change a record, such as a sword's damage, then save just that change as its own small `.esp` mod.
+Open, edit and extract Skyrim Legendary Edition `.esp` / `.esm` plugin files (Special Edition plugins open too and can be converted to Legendary Edition) on your phone. Change a record, such as a sword's damage, then save just that change as its own small `.esp` mod.
 
 **[Download the Android app](https://github.com/End2417/skyrim-plugin-workshop/releases/latest)** · **[Project website](https://end2417.github.io/skyrim-plugin-workshop/)**
 
 ## Features
 
-- Browse every record in a plugin and search by FormID or Editor ID.
-- Edit values in readable fields instead of raw bytes. Records you don't touch save byte-for-byte identical.
+- On first launch the app offers to set up Skyrim's own files. On Android, pick Skyrim's `Data` folder once (read-only) and the app finds `Skyrim.esm`, `Update.esm`, the DLC masters, the Unofficial Skyrim Legendary Edition Patch and loose strings files itself, and Check plugin can read any other master the open plugin lists from the same folder; elsewhere pick the files by hand. Names, search and checks then work everywhere. Do it later from the info button.
+- Browse every record in a plugin and filter it with three separate boxes under the column titles: **FormID** (part of the hex ID), **EditorID** and **Name**. Every box you fill in has to match, and each word you type must appear in that field.
+- When editing a field that points at another record, type words ("steel sword") to get a collapsible list of matching records and tap one to fill in its FormID. Records in the masters you added in Check plugin are searchable too, and references into them show their names (pick a localized master's strings files with it).
+- **Bulk edit** (sliders button): change one number in many records at once, such as halving every armor's weight, with a preview of every change first.
+- Sort the record list by FormID, EditorID or Name: tap a column title, tap again to reverse, once more for file order.
+- Edit values in readable fields instead of raw bytes. The three-dot menu on a repeatable field (inventory items, factions...) can add or duplicate an entry right below it. Records you don't touch save byte-for-byte identical.
 - **Extract** only the records you changed into a new `.esp` that overrides the originals and lists the source plugin as its master.
   - Optionally include the records your changes depend on (keywords, sounds, effects...), following references one to three levels deep, with a checklist to drop any of them.
   - Or add the records to an existing patch plugin instead of making a new file. The patch's master list has to line up with the source's, because FormIDs are never renumbered; the app tells you when it does not. The patch you pick is not changed: the result is saved as a copy.
@@ -54,6 +58,28 @@ This project was created with the help of AI tools, including Lovable and Claude
 
 This is an unofficial fan tool and is not affiliated with Bethesda Softworks.
 
+## Updating from a zip
+
+The **Import zip and build** workflow (Actions tab) takes a project zip, extracts it, copies the files into the repository (website pages in `docs/` included), commits them, and builds the Android app.
+
+1. Upload the zip to the repository root or to `updates/`, committing straight to `main` (on GitHub: **Add file → Upload files**). The workflow starts as soon as the commit lands. Or start it by hand from the Actions tab and set `zip_path`. If you upload to a new branch or open a pull request instead, it starts once that is merged into `main`.
+2. Optional inputs: a version (for example `1.4.0`), whether to create a GitHub release with the APK, whether to delete repo files that are not in the zip, and whether to keep the zip afterwards.
+3. The APK and AAB are attached to the run as an artifact.
+
+The workflow does not copy `.github/` from the zip, because GitHub's built-in token may not change workflow files; edit workflows in the repository itself. It needs the same signing secrets as the normal build (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`) and a branch that allows pushes from GitHub Actions.
+
+## Trying changes in a separate repository
+
+The **Test build** workflow (`.github/workflows/test-build.yml`) builds the app as "ESP Editor TEST", with its own app ID, so it installs next to the normal app instead of replacing it. It uses Android's debug signing, so it needs no secrets.
+
+It is made for a spare repository where you can only upload single files:
+
+1. In the spare repository choose **Add file → Create new file**, type `.github/workflows/test-build.yml` as the name (typing the slashes creates the folders) and paste in the contents of that workflow file.
+2. Upload the project `.zip` to the repository root.
+3. The workflow extracts the zip and builds from it. It starts by itself when you upload or push, or from the **Actions** tab. Nothing is committed back to the repository.
+4. Download `ESP-Editor-test.apk` from the run's artifacts.
+
+If there is no zip, it builds the project files in the repository instead.
 
 ## Development
 

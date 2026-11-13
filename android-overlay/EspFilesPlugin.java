@@ -9,6 +9,7 @@ import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import androidx.activity.result.ActivityResult;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -29,6 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *  1. "Open with": hand the plugin file that Android passed in (Files app, browser downloads...) to the web app.
  *  2. "Save folder": let the person pick any folder with Android's own picker (Storage Access Framework)
  *     and write files into it, keeping the permission across restarts.
+ *  3. "Skyrim folder": a folder picked read-only, listed and read file by file, so the app can set itself up from
+ *     Skyrim's own Data folder.
  * Files are moved in base64 chunks so big plugins never need one huge string.
  */
 @CapacitorPlugin(name = "EspFiles")
@@ -163,15 +166,14 @@ public class EspFilesPlugin extends Plugin {
 
     // ---------- save folder ----------
 
+    /** Opens the folder picker. With readOnly, only reading is asked for (enough for the Skyrim folder). */
     @PluginMethod
     public void pickFolder(PluginCall call) {
+        boolean readOnly = Boolean.TRUE.equals(call.getBoolean("readOnly", false));
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-        intent.addFlags(
-            Intent.FLAG_GRANT_READ_URI_PERMISSION |
-            Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
-            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION |
-            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
-        );
+        int flags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION;
+        if (!readOnly) flags |= Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+        intent.addFlags(flags);
         startActivityForResult(call, intent, "pickFolderResult");
     }
 
@@ -185,9 +187,9 @@ public class EspFilesPlugin extends Plugin {
         }
         Uri tree = data.getData();
         try {
-            getContext()
-                .getContentResolver()
-                .takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            boolean readOnly = Boolean.TRUE.equals(call.getBoolean("readOnly", false));
+            int take = Intent.FLAG_GRANT_READ_URI_PERMISSION | (readOnly ? 0 : Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            getContext().getContentResolver().takePersistableUriPermission(tree, take);
             JSObject ret = new JSObject();
             ret.put("uri", tree.toString());
             String name = queryName(rootDocument(tree));
@@ -206,9 +208,10 @@ public class EspFilesPlugin extends Plugin {
         ret.put("ok", false);
         if (uri != null) {
             Uri tree = Uri.parse(uri);
+            boolean needWrite = !Boolean.FALSE.equals(call.getBoolean("needWrite", true));
             boolean granted = false;
             for (android.content.UriPermission p : getContext().getContentResolver().getPersistedUriPermissions()) {
-                if (p.getUri().equals(tree) && p.isWritePermission()) granted = true;
+                if (p.getUri().equals(tree) && p.isReadPermission() && (!needWrite || p.isWritePermission())) granted = true;
             }
             String name = null;
             try {
@@ -311,7 +314,77 @@ public class EspFilesPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    // ---------- Skyrim folder ----------
+
+    /**
+     * Lists a folder inside a chosen tree. "path" is a list of folder names to walk down from the tree's root
+     * (matched ignoring case), so the web app can ask for "Data" and then "Strings". The returned uris can be
+     * read with openRead.
+     */
+    @PluginMethod
+    public void listFolder(PluginCall call) {
+        String treeUri = call.getString("treeUri");
+        if (treeUri == null) {
+            call.reject("treeUri is required");
+            return;
+        }
+        try {
+            Uri tree = Uri.parse(treeUri);
+            String docId = DocumentsContract.getTreeDocumentId(tree);
+            JSArray path = call.getArray("path");
+            if (path != null) {
+                for (int i = 0; i < path.length(); i++) {
+                    docId = findChildId(tree, docId, path.getString(i));
+                    if (docId == null) {
+                        JSObject none = new JSObject();
+                        none.put("found", false);
+                        none.put("entries", new JSArray());
+                        call.resolve(none);
+                        return;
+                    }
+                }
+            }
+            JSArray entries = new JSArray();
+            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
+            String[] cols = {
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+            };
+            try (Cursor c = getContext().getContentResolver().query(children, cols, null, null, null)) {
+                while (c != null && c.moveToNext()) {
+                    JSObject e = new JSObject();
+                    e.put("name", c.getString(1));
+                    e.put("uri", DocumentsContract.buildDocumentUriUsingTree(tree, c.getString(0)).toString());
+                    e.put("dir", DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2)));
+                    e.put("size", c.isNull(3) ? 0 : c.getLong(3));
+                    entries.put(e);
+                }
+            }
+            JSObject ret = new JSObject();
+            ret.put("found", true);
+            ret.put("entries", entries);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("Could not list the folder: " + e.getMessage(), e);
+        }
+    }
+
     // ---------- helpers ----------
+
+    private String findChildId(Uri tree, String parentId, String name) {
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId);
+        String[] cols = { DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME };
+        try (Cursor c = getContext().getContentResolver().query(children, cols, null, null, null)) {
+            while (c != null && c.moveToNext()) {
+                if (name.equalsIgnoreCase(c.getString(1))) return c.getString(0);
+            }
+        } catch (Exception ignored) {
+            // an unreadable listing: treat the folder as missing
+        }
+        return null;
+    }
 
     private Uri rootDocument(Uri tree) {
         return DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));

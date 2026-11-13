@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowLeftRight, Download, FolderCog, FolderOpen, Info, ListChecks, PackageOpen, Search, ShieldCheck, X } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowLeftRight, ArrowUp, Download, FolderCog, FolderOpen, Info, ListChecks, PackageOpen, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DecodeContext } from "@/lib/esp/decode";
 import { downloadPlugin } from "@/lib/esp/download";
 import { onFileOpened, readOpenedFile, takePendingFile, type OpenedFile } from "@/lib/native/espFiles";
-import { buildSearchIndex, searchIndex, type SearchIndex } from "@/lib/esp/search";
+import { buildSearchIndex, filterIndex, hasFieldQuery, searchIndex, type SearchIndex } from "@/lib/esp/search";
 import { applyDraft, clearDraft, fileSignature, loadDraft, makeDraft, saveDraft, type Draft } from "@/lib/esp/draft";
 import {
   forgetStringFiles,
@@ -35,10 +35,17 @@ import {
 import { AboutDialog, useFirstLaunchAbout } from "./AboutDialog";
 import { ChangesDialog } from "./ChangesDialog";
 import { CheckDialog } from "./CheckDialog";
+import { BulkEditDialog } from "./BulkEditDialog";
 import { ConvertDialog } from "./ConvertDialog";
+import { SetupDialog } from "./SetupDialog";
+import { isSetupDone, markSetupDone } from "@/lib/esp/setupState";
 import { detectEdition } from "@/lib/esp/convert";
+import { nextSort, sortRecords, type SortColumn, type SortState } from "@/lib/esp/sort";
 import { ExtractDialog } from "./ExtractDialog";
 import { RecordRow, RecordTree, TREE_COLS } from "./RecordTree";
+import { RecordFinderContext, type RecordFinder } from "./recordPicker";
+import { describeMasterEntry, findMasterEntry, searchMasterNames, type MasterNames } from "@/lib/esp/masterNames";
+import { listRememberedMasters, recallMasterNames } from "@/lib/esp/masterStore";
 import { RecordView } from "./RecordView";
 import { SaveFolderDialog, saveFolderSupported } from "./SaveFolderDialog";
 
@@ -56,6 +63,9 @@ export function EspEditor() {
   const [extractOpen, setExtractOpen] = useState(false);
   const [checkOpen, setCheckOpen] = useState(false);
   const [convertOpen, setConvertOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [sort, setSort] = useState<SortState | null>(null);
   const [folderOpen, setFolderOpen] = useState(false);
   const [native, setNative] = useState(false); // known only on the device, so set after the first render
   const searchIndexRef = useRef<SearchIndex | null>(null);
@@ -74,6 +84,7 @@ export function EspEditor() {
   const [modified, setModified] = useState(false);
   const [filterId, setFilterId] = useState("");
   const [filterEdid, setFilterEdid] = useState("");
+  const [filterName, setFilterName] = useState("");
   const [results, setResults] = useState<EspRecord[] | null>(null);
   const [rev, setRev] = useState(0);
   const [indexRev, setIndexRev] = useState(0);
@@ -87,6 +98,65 @@ export function EspEditor() {
   // Read once per opened file: it only looks at record headers, so it is cheap, but it need not rerun on every edit.
   const edition = useMemo(() => (file ? detectEdition(file).edition : null), [file]);
 
+  // First launch: offer to set up Skyrim's own files (skipped if masters were already added some other way)
+  useEffect(() => {
+    if (isSetupDone()) return;
+    let live = true;
+    void listRememberedMasters().then((list) => {
+      if (!live) return;
+      if (list.length > 0) markSetupDone();
+      else setSetupOpen(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // Names of the records in the masters the app remembers, by master slot, so references into them can be shown and searched
+  const masterNamesRef = useRef<(MasterNames | null)[]>([]);
+  const [, setMasterNamesRev] = useState(0);
+  useEffect(() => {
+    masterNamesRef.current = [];
+    setMasterNamesRev((n) => n + 1);
+    if (!file) return;
+    let live = true;
+    void Promise.all(fileInfo(file).masters.map((m) => recallMasterNames(m))).then((list) => {
+      if (!live) return;
+      masterNamesRef.current = list;
+      setMasterNamesRev((n) => n + 1);
+    });
+    return () => {
+      live = false;
+    };
+    // checkOpen, setupOpen: masters are added in those dialogs, so look again when they close
+  }, [file, checkOpen, setupOpen]);
+
+  // Lets the reference editor suggest records by name: this plugin's first, then its remembered masters'
+  const findRecords: RecordFinder = async (query, limit, cancelled) => {
+    const ix = searchIndexRef.current;
+    if (!ix || ix.file !== fileRef.current) return null;
+    const own = await searchIndex(ix, query, limit, cancelled);
+    if (!own) return null;
+    const ids = own.map((r) => r.formId >>> 0);
+    const seen = new Set(ids);
+    masterNamesRef.current.forEach((m, slot) => {
+      if (!m) return;
+      for (const i of searchMasterNames(m, query, limit)) {
+        if (ids.length >= limit) return;
+        const id = ((slot << 24) | m.ids[i]!) >>> 0;
+        if (!seen.has(id)) {
+          seen.add(id);
+          ids.push(id);
+        }
+      }
+    });
+    return ids;
+  };
+
+  // Search results in the chosen order (the tree sorts each group itself)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `rev` is how edits made in place are noticed
+  const orderedResults = useMemo(() => (results && sort ? sortRecords(results, sort, info.localized) : results), [results, sort, info.localized, rev]);
+
   const ctx: DecodeContext = {
     localized: info.localized,
     resolveFormId: (id) => {
@@ -98,7 +168,12 @@ export function EspEditor() {
         return `${e ?? ""}${n ? ` "${n}"` : ""} [${r.type}:${hex8(id)}]`.trim();
       }
       const hi = id >>> 24;
-      if (hi < info.masters.length) return `[${hex8(id)}] from ${info.masters[hi]}`;
+      if (hi < info.masters.length) {
+        const m = masterNamesRef.current[hi];
+        const at = m ? findMasterEntry(m, id & 0xffffff) : -1;
+        if (m && at >= 0) return describeMasterEntry(m, at, id);
+        return `[${hex8(id)}] from ${info.masters[hi]}`;
+      }
       return `[${hex8(id)}] (not found in this file)`;
     },
   };
@@ -204,6 +279,7 @@ export function EspEditor() {
       setResults(null);
       setFilterId("");
       setFilterEdid("");
+      setFilterName("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -266,10 +342,10 @@ export function EspEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file, indexRev]);
 
-  // Search as you type, a moment after you stop. Runs in slices, and a newer search replaces an older one.
+  // Filter as you type, a moment after you stop. Runs in slices, and a newer search replaces an older one.
   useEffect(() => {
     if (!file) return;
-    if (!filterEdid.trim()) {
+    if (!hasFieldQuery({ formId: filterId, editorId: filterEdid, name: filterName })) {
       setResults(null);
       return;
     }
@@ -277,7 +353,7 @@ export function EspEditor() {
     const t = setTimeout(() => {
       const ix = searchIndexRef.current;
       if (!ix || ix.file !== file) return; // runs again when the index is ready
-      void searchIndex(ix, filterEdid, MAX_RESULTS, () => cancelled).then((res) => {
+      void filterIndex(ix, { formId: filterId, editorId: filterEdid, name: filterName }, MAX_RESULTS, () => cancelled).then((res) => {
         if (cancelled || !res) return;
         setResults(res);
         setShown(PAGE_SIZE);
@@ -287,7 +363,7 @@ export function EspEditor() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [filterEdid, file, indexedFile]);
+  }, [filterId, filterEdid, filterName, file, indexedFile]);
 
   fileRef.current = file;
 
@@ -355,7 +431,7 @@ export function EspEditor() {
     };
   }, []);
 
-  const preparingSearch = !!file && filterEdid.trim() !== "" && indexedFile !== file;
+  const preparingSearch = !!file && hasFieldQuery({ formId: filterId, editorId: filterEdid, name: filterName }) && indexedFile !== file;
 
   const breadcrumb: string[] = [];
   if (file && selected) {
@@ -387,6 +463,9 @@ export function EspEditor() {
           </Button>
           <Button variant="ghost" size="icon" className="size-8" onClick={() => setChangesOpen(true)} disabled={!file} aria-label="Review your changes" title="Review your changes">
             <ListChecks />
+          </Button>
+          <Button variant="ghost" size="icon" className="size-8" onClick={() => setBulkOpen(true)} disabled={!file} aria-label="Bulk edit" title="Change one number in many records at once">
+            <SlidersHorizontal />
           </Button>
           <Button variant="ghost" size="icon" className="size-8" onClick={() => setCheckOpen(true)} disabled={!file} aria-label="Check plugin" title="Check for missing masters and records">
             <ShieldCheck />
@@ -496,27 +575,6 @@ export function EspEditor() {
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(360px,460px)_1fr]">
           <aside className="flex min-h-0 flex-col border-b lg:border-r lg:border-b-0">
-            <form
-              role="search"
-              onSubmit={(e) => {
-                e.preventDefault();
-                (document.activeElement as HTMLElement | null)?.blur(); // hide the keyboard to see the results
-              }}
-              className="flex items-center gap-2 border-b p-2"
-            >
-              <Search className="size-4 shrink-0 text-muted-foreground" />
-              <Input
-                id="flt-q"
-                type="search"
-                enterKeyHint="search"
-                aria-label="Search records"
-                placeholder="Search: bow, iron sword, 00012EB7"
-                value={filterEdid}
-                onChange={(e) => setFilterEdid(e.target.value)}
-                className="h-8 text-sm"
-              />
-              <button type="submit" className="sr-only">Search</button>
-            </form>
             {info.localized && (
               <div className="border-b px-3 py-1.5 text-xs text-muted-foreground">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -545,9 +603,48 @@ export function EspEditor() {
             )}
             {preparingSearch && <p className="border-b px-3 py-1 text-xs text-muted-foreground">Preparing search… large plugins take a moment the first time.</p>}
             <div className={`${TREE_COLS} border-b bg-muted px-2 py-1 text-xs font-medium text-muted-foreground`}>
-              <span className="pl-5">FormID</span>
-              <span>EditorID</span>
-              <span>Name</span>
+              <SortHeader label="FormID" column="formId" sort={sort} onSort={(c) => setSort((cur) => nextSort(cur, c))} className="pl-5" />
+              <SortHeader label="EditorID" column="editorId" sort={sort} onSort={(c) => setSort((cur) => nextSort(cur, c))} />
+              <SortHeader label="Name" column="name" sort={sort} onSort={(c) => setSort((cur) => nextSort(cur, c))} />
+            </div>
+            <div role="search" className={`${TREE_COLS} border-b px-2 py-1.5`}>
+              <Input
+                type="search"
+                enterKeyHint="search"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-label="Filter by FormID"
+                placeholder="FormID"
+                value={filterId}
+                onChange={(e) => setFilterId(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLElement).blur()}
+                className="h-8 min-w-0 px-2 font-mono text-xs"
+              />
+              <Input
+                type="search"
+                enterKeyHint="search"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-label="Filter by Editor ID"
+                placeholder="EditorID"
+                value={filterEdid}
+                onChange={(e) => setFilterEdid(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLElement).blur()}
+                className="h-8 min-w-0 px-2 text-xs"
+              />
+              <Input
+                type="search"
+                enterKeyHint="search"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-label="Filter by Name"
+                placeholder="Name"
+                value={filterName}
+                onChange={(e) => setFilterName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLElement).blur()}
+                className="h-8 min-w-0 px-2 text-xs"
+              />
             </div>
             <div className="max-h-[45vh] flex-1 overflow-auto py-1 lg:max-h-none">
               {results ? (
@@ -559,13 +656,14 @@ export function EspEditor() {
                         setResults(null);
                         setFilterId("");
                         setFilterEdid("");
+                        setFilterName("");
                       }}
                       className="text-primary hover:underline"
                     >
                       Clear filter
                     </button>
                   </div>
-                  {results.slice(0, shown).map((r) => (
+                  {(orderedResults ?? results).slice(0, shown).map((r) => (
                     <RecordRow
                       key={r.uid}
                       record={r}
@@ -585,7 +683,7 @@ export function EspEditor() {
                   )}
                   {results.length === 0 && (
                     <p className="px-3 py-4 text-sm text-muted-foreground">
-                      Nothing matches “{filterEdid.trim()}”. Try fewer or shorter words, such as “bow” instead of “hunting bow”.
+                      Nothing matches. Every box you fill in has to match, so try fewer or shorter words, or clear one of the boxes.
                     </p>
                   )}
                 </>
@@ -596,6 +694,8 @@ export function EspEditor() {
                   expanded={expanded}
                   selected={selected}
                   localized={info.localized}
+                  sort={sort}
+                  version={rev}
                   onToggle={toggle}
                   onSelect={(r) => select(r)}
                 />
@@ -604,6 +704,7 @@ export function EspEditor() {
           </aside>
           <main ref={panelRef} className="min-w-0 overflow-auto">
             {selected ? (
+              <RecordFinderContext.Provider value={findRecords}>
               <RecordView
                 key={selected.uid}
                 file={file}
@@ -616,20 +717,65 @@ export function EspEditor() {
                   changed({ reindex: true });
                 }}
               />
+              </RecordFinderContext.Provider>
             ) : (
               <p className="p-6 text-sm text-muted-foreground">Select a record to view and edit it.</p>
             )}
           </main>
         </div>
       )}
-      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <AboutDialog
+        open={aboutOpen}
+        onOpenChange={setAboutOpen}
+        onSetup={() => {
+          setAboutOpen(false);
+          setSetupOpen(true);
+        }}
+      />
+      <SetupDialog
+        open={setupOpen && !aboutOpen}
+        onOpenChange={(o) => {
+          setSetupOpen(o);
+          if (!o) markSetupDone();
+        }}
+      />
       {file && (
         <ChangesDialog open={changesOpen} onOpenChange={setChangesOpen} file={file} ctx={ctx} rev={rev} onRevert={revert} onGoTo={(r) => select(r, true)} />
       )}
+      {file && <BulkEditDialog open={bulkOpen} onOpenChange={setBulkOpen} file={file} localized={info.localized} onApplied={() => changed()} />}
       {file && <ExtractDialog open={extractOpen} onOpenChange={setExtractOpen} file={file} selected={selected} />}
       {file && <ConvertDialog open={convertOpen} onOpenChange={setConvertOpen} file={file} />}
       {file && <CheckDialog open={checkOpen} onOpenChange={setCheckOpen} file={file} onGoTo={(r) => select(r, true)} />}
       <SaveFolderDialog open={folderOpen} onOpenChange={setFolderOpen} />
     </div>
+  );
+}
+
+/** A clickable column title: click to sort, again to reverse, once more to go back to the file order. */
+function SortHeader({
+  label,
+  column,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string;
+  column: SortColumn;
+  sort: SortState | null;
+  onSort: (column: SortColumn) => void;
+  className?: string;
+}) {
+  const active = sort?.column === column ? sort : null;
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(column)}
+      aria-sort={active ? (active.dir === "asc" ? "ascending" : "descending") : "none"}
+      title={`Sort by ${label}`}
+      className={`flex min-w-0 items-center gap-1 text-left hover:text-foreground ${active ? "text-primary" : ""} ${className ?? ""}`}
+    >
+      <span className="truncate">{label}</span>
+      {active && (active.dir === "asc" ? <ArrowUp className="size-3 shrink-0" /> : <ArrowDown className="size-3 shrink-0" />)}
+    </button>
   );
 }

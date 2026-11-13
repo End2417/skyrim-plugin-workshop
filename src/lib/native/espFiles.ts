@@ -13,13 +13,22 @@ export interface SaveFolder {
   name: string;
 }
 
+/** One item in a listed folder. `uri` can be read with {@link readFolderFile}. */
+export interface FolderEntry {
+  name: string;
+  uri: string;
+  dir: boolean;
+  size: number;
+}
+
 interface EspFilesPlugin {
   getPendingFile(): Promise<{ file?: OpenedFile }>;
   openRead(opts: { uri: string }): Promise<{ handle: string }>;
   readNext(opts: { handle: string; length: number }): Promise<{ data: string; bytes: number }>;
   closeRead(opts: { handle: string }): Promise<void>;
-  pickFolder(): Promise<SaveFolder>;
-  folderStatus(opts: { uri: string }): Promise<{ ok: boolean; name?: string }>;
+  pickFolder(opts?: { readOnly?: boolean }): Promise<SaveFolder>;
+  folderStatus(opts: { uri: string; needWrite?: boolean }): Promise<{ ok: boolean; name?: string }>;
+  listFolder(opts: { treeUri: string; path?: string[] }): Promise<{ found: boolean; entries: FolderEntry[] }>;
   beginWrite(opts: { treeUri: string; name: string }): Promise<{ handle: string }>;
   writeChunk(opts: { handle: string; data: string }): Promise<void>;
   endWrite(opts: { handle: string; abort?: boolean }): Promise<{ name: string; uri: string }>;
@@ -158,4 +167,57 @@ export async function writeToFolder(folder: SaveFolder, filename: string, bytes:
     await plugin.endWrite({ handle, abort: true }).catch(() => {});
     throw e;
   }
+}
+
+// ---------- Skyrim folder (read-only) ----------
+
+const SKYRIM_KEY = "esp-editor-skyrim-folder";
+
+export function getSkyrimFolder(): SaveFolder | null {
+  try {
+    const raw = localStorage.getItem(SKYRIM_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Partial<SaveFolder>;
+    return typeof v.uri === "string" && typeof v.name === "string" ? { uri: v.uri, name: v.name } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Opens Android's folder picker for Skyrim's folder (or its Data folder), asking only to read. Null if the person backs out. */
+export async function chooseSkyrimFolder(): Promise<SaveFolder | null> {
+  try {
+    const folder = await plugin.pickFolder({ readOnly: true });
+    try {
+      localStorage.setItem(SKYRIM_KEY, JSON.stringify(folder));
+    } catch {
+      /* it just has to be picked again next time */
+    }
+    return folder;
+  } catch (e) {
+    if ((e as { code?: string }).code === "CANCELLED") return null;
+    throw e;
+  }
+}
+
+/** The chosen Skyrim folder if Android still allows reading it. */
+export async function usableSkyrimFolder(): Promise<SaveFolder | null> {
+  const folder = getSkyrimFolder();
+  if (!folder || !nativeFilesAvailable()) return null;
+  try {
+    const status = await plugin.folderStatus({ uri: folder.uri, needWrite: false });
+    return status.ok ? { uri: folder.uri, name: status.name ?? folder.name } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Lists a folder below the chosen one; `path` walks down by folder name (ignoring case). */
+export async function listFolder(folder: SaveFolder, path: string[] = []): Promise<{ found: boolean; entries: FolderEntry[] }> {
+  return plugin.listFolder({ treeUri: folder.uri, path });
+}
+
+/** Reads a file from a listing. */
+export function readFolderFile(entry: FolderEntry): Promise<Uint8Array> {
+  return readOpenedFile({ uri: entry.uri, name: entry.name });
 }

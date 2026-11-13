@@ -35,6 +35,7 @@ import {
   type EspRecord,
   type Subrecord,
 } from "@/lib/esp/format";
+import { canAddAnother, insertionIndex } from "@/lib/esp/repeat";
 import { FlagsEditor, LeafEditor, RawFieldEditor } from "./FieldEditors";
 
 interface Props {
@@ -189,6 +190,11 @@ export function RecordView({ file, record, ctx, onChange, onDeleted }: Props) {
           ) : (
             subs.map((s, i) => {
               const node = decodeSubrecord(record.type, s, edid, ctx);
+              const repeatable = canAddAnother(record.type, s.type, subs.filter((x) => x.type === s.type).length);
+              const blankEntry = (): Subrecord => {
+                const def = findSubDef(record.type, s.type) ? resolveSubDef(record.type, { type: s.type, data: new Uint8Array(0) }, edid) : null;
+                return { type: s.type, data: defaultData(def, ctx.localized) };
+              };
               const commit = (leafNode: FieldNode) => (v: string | number) =>
                 tryMutate(() => {
                   subs[i] = { type: s.type, data: writeLeaf(s.data, leafNode.leaf!, v, ctx.localized) };
@@ -216,6 +222,17 @@ export function RecordView({ file, record, ctx, onChange, onDeleted }: Props) {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          {repeatable && (
+                            <>
+                              <DropdownMenuItem onSelect={() => mutate(() => subs.splice(insertionIndex(subs, i), 0, blankEntry()))}>
+                                Add another {s.type} below
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => mutate(() => subs.splice(insertionIndex(subs, i), 0, { type: s.type, data: s.data.slice() }))}>
+                                Duplicate {s.type} below
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                            </>
+                          )}
                           <DropdownMenuItem onSelect={() => setRawEditing(i)}>Edit raw bytes</DropdownMenuItem>
                           <DropdownMenuItem disabled={i === 0} onSelect={() => mutate(() => subs.splice(i - 1, 2, subs[i]!, subs[i - 1]!))}>
                             Move up

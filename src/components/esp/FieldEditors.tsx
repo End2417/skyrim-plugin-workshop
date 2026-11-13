@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, X } from "lucide-react";
+import { useContext, useEffect, useState } from "react";
+import { Check, ChevronDown, ChevronUp, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,6 +16,7 @@ import {
   zstringValue,
   type Subrecord,
 } from "@/lib/esp/format";
+import { RecordFinderContext } from "./recordPicker";
 
 interface LeafEditorProps {
   leaf: Leaf;
@@ -82,6 +83,55 @@ function TextLeafEditor({
             ? `0x${(current as number).toString(16).toUpperCase()}`
             : String(current);
   const [value, setValue] = useState(initial);
+
+  // Reference fields can also be filled by name: typing words lists the records in this plugin that match.
+  const finder = useContext(RecordFinderContext);
+  const [touched, setTouched] = useState(false);
+  const [matches, setMatches] = useState<number[] | null>(null);
+  const [notReady, setNotReady] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const [listOpen, setListOpen] = useState(true);
+  const typed = value.trim();
+  const isFullId = /^(0x)?[0-9a-f]{8}$/i.test(typed);
+  const looksLikeId = /^(0x)?[0-9a-f]{1,8}$/i.test(typed);
+
+  useEffect(() => {
+    if (!isRef || !finder || !touched || isFullId || typed.length < 2) {
+      setMatches(null);
+      setNotReady(false);
+      return;
+    }
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const t = setTimeout(() => {
+      void finder(typed, 30, () => cancelled).then((res) => {
+        if (cancelled) return;
+        if (res === null) {
+          // The search index is still being built in the background; try again shortly
+          setNotReady(true);
+          setMatches(null);
+          retryTimer = setTimeout(() => setRetry((n) => n + 1), 700);
+        } else {
+          setNotReady(false);
+          setMatches(res);
+          setListOpen(true);
+        }
+      });
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+      clearTimeout(retryTimer);
+    };
+  }, [isRef, finder, touched, isFullId, typed, retry]);
+
+  const choose = (id: number) => {
+    setValue(hex8(id));
+    setMatches(null);
+    setNotReady(false);
+    setTouched(false);
+  };
+
   let preview: string | null = null;
   if (isRef) {
     try {
@@ -108,9 +158,16 @@ function TextLeafEditor({
           <Input
             autoFocus
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setTouched(true);
+            }}
             onKeyDown={(e) => {
-              if (e.key === "Enter") onCommit(value);
+              if (e.key === "Enter") {
+                // Words rather than a FormID: Enter takes the best match instead of failing
+                if (isRef && !looksLikeId && matches && matches.length > 0) choose(matches[0]!);
+                else onCommit(value);
+              }
               if (e.key === "Escape") onCancel();
             }}
             className="h-8 font-mono text-sm"
@@ -121,7 +178,34 @@ function TextLeafEditor({
         </Button>
         <CancelBtn onCancel={onCancel} />
       </div>
-      {isRef && <p className="text-xs text-muted-foreground">{preview ?? "Enter a FormID in hex"}</p>}
+      {isRef && <p className="text-xs text-muted-foreground">{preview ?? "Type a name to search, or enter a FormID in hex"}</p>}
+      {isRef && (matches !== null || notReady) && (
+        <div className="rounded-md border bg-card">
+          <button
+            type="button"
+            onClick={() => setListOpen((o) => !o)}
+            aria-expanded={listOpen}
+            className="flex w-full items-center justify-between px-2 py-1 text-xs text-muted-foreground"
+          >
+            <span>{notReady || !matches ? "Preparing search…" : `${matches.length}${matches.length >= 30 ? "+" : ""} match${matches.length === 1 ? "" : "es"}`}</span>
+            {listOpen ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+          </button>
+          {listOpen && matches && (
+            <ul className="max-h-56 divide-y overflow-auto border-t">
+              {matches.map((r) => (
+                <li key={r}>
+                  <button type="button" onClick={() => choose(r)} className="block w-full break-words px-2 py-1.5 text-left font-mono text-xs hover:bg-accent">
+                    {resolveFormId(r)}
+                  </button>
+                </li>
+              ))}
+              {matches.length === 0 && (
+                <li className="px-2 py-2 text-xs text-muted-foreground">Nothing matches in this plugin or the masters the app remembers. Masters are added in Check plugin; or type the FormID.</li>
+              )}
+            </ul>
+          )}
+        </div>
+      )}
       {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );

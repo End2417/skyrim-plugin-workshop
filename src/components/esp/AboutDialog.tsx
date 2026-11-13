@@ -36,7 +36,7 @@ const CREDITS: [string, string][] = [
   ["Open-source software", "Capacitor, React, TanStack, Tailwind CSS, Radix UI, shadcn/ui, Lucide icons and fflate."],
 ];
 
-export function AboutDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function AboutDialog({ open, onOpenChange, onSetup }: { open: boolean; onOpenChange: (open: boolean) => void; onSetup?: () => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-auto sm:max-w-md">
@@ -69,6 +69,11 @@ export function AboutDialog({ open, onOpenChange }: { open: boolean; onOpenChang
         </p>
 
         <DialogFooter>
+          {onSetup && (
+            <Button variant="secondary" onClick={onSetup}>
+              Set up Skyrim files
+            </Button>
+          )}
           <Button onClick={() => onOpenChange(false)}>Got it</Button>
         </DialogFooter>
       </DialogContent>
