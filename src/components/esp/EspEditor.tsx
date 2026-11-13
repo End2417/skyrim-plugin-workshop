@@ -367,7 +367,7 @@ export function EspEditor() {
 
   return (
     <div className="flex min-h-screen flex-col lg:h-screen">
-      <header className="flex flex-wrap items-center gap-3 border-b bg-card px-4 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+      <header className="flex flex-wrap items-center gap-3 bg-card px-4 pb-1 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <h1 className="font-display text-lg tracking-wide text-primary">Skyrim ESP Editor for Android</h1>
         {file && (
           <span className="max-w-full truncate font-mono text-xs text-muted-foreground">
@@ -378,7 +378,10 @@ export function EspEditor() {
             {draftNote && <span className="ml-2">· {draftNote}</span>}
           </span>
         )}
-        <div className="ml-auto flex max-w-full flex-wrap justify-end gap-2">
+      </header>
+      {/* Only the buttons stay pinned while the page scrolls; the title and status line scroll away. */}
+      <div className="sticky top-0 z-30 border-b bg-card px-4 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+        <div className="flex flex-wrap justify-end gap-2">
           <Button variant="ghost" size="icon" className="size-8" onClick={() => setAboutOpen(true)} aria-label="About and credits">
             <Info />
           </Button>
@@ -417,7 +420,7 @@ export function EspEditor() {
             <Download /> Save
           </Button>
         </div>
-      </header>
+      </div>
 
       {saveFeedback && (
         <div
