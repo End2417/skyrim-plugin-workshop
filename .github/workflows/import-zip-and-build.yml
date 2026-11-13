@@ -194,11 +194,38 @@ jobs:
           node scripts/patch-android.mjs
           # Launcher icon from the app's own maskable icon
           RES=android/app/src/main/res
-          rm -rf $RES/mipmap-anydpi-v26
+          rm -rf $RES/mipmap-anydpi-v26 $RES/drawable-v24/ic_launcher_foreground.xml
+          # Adaptive icon (Android 8+): the launcher masks it to its own shape. The background is the icon's flat
+          # colour; the foreground is the icon at 72% on a transparent 108dp canvas, so the logo stays in the safe zone.
+          BG="#152846"
+          mkdir -p $RES/mipmap-anydpi-v26 $RES/values
+          cat > $RES/values/esp_icon_colors.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources><color name="esp_icon_bg">$BG</color></resources>
+          XML
+          for f in ic_launcher ic_launcher_round; do
+            cat > $RES/mipmap-anydpi-v26/$f.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+            <background android:drawable="@color/esp_icon_bg"/>
+            <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+          </adaptive-icon>
+          XML
+          done
+          for d in mdpi:108 hdpi:162 xhdpi:216 xxhdpi:324 xxxhdpi:432; do
+            C=${d#*:}; I=$((C * 72 / 100)); M=$RES/mipmap-${d%:*}; mkdir -p $M
+            convert public/icons/icon-maskable-512.png -resize ${I}x${I} -background none -gravity center -extent ${C}x${C} $M/ic_launcher_foreground.png
+          done
+          # Rounded legacy icons for Android 7 and older
           for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
-            convert public/icons/icon-maskable-512.png -resize ${d#*:}x${d#*:} $RES/mipmap-${d%:*}/ic_launcher.png
-            cp $RES/mipmap-${d%:*}/ic_launcher.png $RES/mipmap-${d%:*}/ic_launcher_round.png
-            cp $RES/mipmap-${d%:*}/ic_launcher.png $RES/mipmap-${d%:*}/ic_launcher_foreground.png
+            S=${d#*:}; M=$RES/mipmap-${d%:*}; mkdir -p $M
+            R=$((S * 22 / 100))
+            convert public/icons/icon-maskable-512.png -resize ${S}x${S} \
+              \( -size ${S}x${S} xc:none -fill white -draw "roundrectangle 0,0,$((S-1)),$((S-1)),$R,$R" \) \
+              -compose DstIn -composite $M/ic_launcher.png
+            convert public/icons/icon-maskable-512.png -resize ${S}x${S} \
+              \( -size ${S}x${S} xc:none -fill white -draw "roundrectangle 0,0,$((S-1)),$((S-1)),$((S/2)),$((S/2))" \) \
+              -compose DstIn -composite $M/ic_launcher_round.png
           done
           npx cap sync android
           # Must be higher than the old TWA release on Play
