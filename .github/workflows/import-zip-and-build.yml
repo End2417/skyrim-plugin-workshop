@@ -173,6 +173,9 @@ jobs:
 
       - name: Build static web app
         if: steps.zip.outputs.found == 'true'
+        env:
+          # The app shows this version and compares it with the newest release when it checks for updates
+          VITE_APP_VERSION: ${{ inputs.version }}
         run: bun run build:android
 
       - name: Locate built index.html
