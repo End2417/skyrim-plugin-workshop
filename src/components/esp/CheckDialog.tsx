@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { checkPlugin, localIds, type CheckReport, type IssueKind, type MasterIds } from "@/lib/esp/check";
 import { fileInfo, getEditorId, hex8, parseEsp, type EspFile, type EspRecord } from "@/lib/esp/format";
 import { importMasterFiles, importMasterSources, type ImportResult } from "@/lib/esp/masterImport";
-import { findPluginsByName, scanSkyrimFolder } from "@/lib/esp/skyrimFolder";
+import { findInterfaceArchive, findPluginsByName, scanSkyrimFolder } from "@/lib/esp/skyrimFolder";
 import { listFolder, nativeFilesAvailable, readFolderFile, usableSkyrimFolder, type SaveFolder } from "@/lib/native/espFiles";
 import { forgetMaster, listRememberedMasters, recallMasterIds } from "@/lib/esp/masterStore";
 
@@ -111,7 +111,13 @@ function CheckForm({ file, onGoTo, onOpenChange }: Props) {
         return;
       }
       const { found, missing } = findPluginsByName(scan, wanted);
-      if (found.length > 0) applyImport(await importMasterSources(found.map((e) => ({ name: e.name, read: () => readFolderFile(e) }))));
+      if (found.length > 0) {
+        const sources = found.map((e) => ({ name: e.name, read: () => readFolderFile(e) }));
+        // Names of a localized master may be inside Skyrim - Interface.bsa (only opened if one needs them)
+        const archive = scan.strings.size === 0 ? findInterfaceArchive(scan) : null;
+        if (archive) sources.push({ name: archive.name, read: () => readFolderFile(archive) });
+        applyImport(await importMasterSources(sources));
+      }
       if (missing.length > 0) setError(`Not in the Skyrim folder: ${missing.join(", ")}.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -189,7 +195,7 @@ function CheckForm({ file, onGoTo, onOpenChange }: Props) {
           ref={inputRef}
           type="file"
           multiple
-          accept=".esp,.esm,.esl,.strings,.dlstrings,.ilstrings,application/octet-stream"
+          accept=".esp,.esm,.esl,.strings,.dlstrings,.ilstrings,.bsa,application/octet-stream"
           className="hidden"
           onChange={(e) => {
             void addMasters(Array.from(e.target.files ?? []));

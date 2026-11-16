@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { MoreHorizontal, Plus, Trash2, Undo2 } from "lucide-react";
+import { Copy, MoreHorizontal, Plus, Trash2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -24,29 +24,32 @@ import {
   type FieldNode,
 } from "@/lib/esp/decode";
 import {
-  deleteRecord,
   getEditorId,
   getSubrecords,
   hex8,
   markDirty,
-  revertRecord,
   toHex,
   type EspFile,
   type EspRecord,
   type Subrecord,
 } from "@/lib/esp/format";
 import { canAddAnother, insertionIndex } from "@/lib/esp/repeat";
+import type { History } from "@/lib/esp/history";
+import { canCopy, removeRecord, revertWithHistory } from "@/lib/esp/records";
 import { FlagsEditor, LeafEditor, RawFieldEditor } from "./FieldEditors";
 
 interface Props {
   file: EspFile;
   record: EspRecord;
   ctx: DecodeContext;
+  history: History;
   onChange: (opts?: { reindex?: boolean }) => void;
   onDeleted: () => void;
+  /** Open the copy dialog for this record. */
+  onCopy: () => void;
 }
 
-export function RecordView({ file, record, ctx, onChange, onDeleted }: Props) {
+export function RecordView({ file, record, ctx, history, onChange, onDeleted, onCopy }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [rawEditing, setRawEditing] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,14 +99,14 @@ export function RecordView({ file, record, ctx, onChange, onDeleted }: Props) {
       <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
         <h2 className="font-display text-xl text-primary">{SIGNATURE_NAMES[record.type] ?? record.type}</h2>
         {record.dirty && <span className="text-xs text-modified">edited</span>}
-        {record.dirty && record.type !== "TES4" && (
+        {record.dirty && record.type !== "TES4" && !file.created?.includes(record) && (
           <Button
             variant="ghost"
             size="sm"
             className="ml-auto"
             onClick={() => {
               if (confirm("Undo all edits to this record and restore the original?")) {
-                revertRecord(record);
+                revertWithHistory(history, file, record);
                 setEditing(null);
                 setError(null);
                 onChange({ reindex: true });
@@ -113,14 +116,19 @@ export function RecordView({ file, record, ctx, onChange, onDeleted }: Props) {
             <Undo2 /> Revert
           </Button>
         )}
+        {canCopy(record) && (
+          <Button variant="ghost" size="sm" className={record.dirty ? "" : "ml-auto"} onClick={onCopy} title="Make a new record with the same fields">
+            <Copy /> Copy
+          </Button>
+        )}
         {record.type !== "TES4" && (
           <Button
             variant="ghost"
             size="sm"
-            className={record.dirty ? "text-destructive" : "ml-auto text-destructive"}
+            className={record.dirty || canCopy(record) ? "text-destructive" : "ml-auto text-destructive"}
             onClick={() => {
               if (confirm(`Delete this ${record.type} record?`)) {
-                deleteRecord(file, record);
+                removeRecord(history, file, record);
                 onDeleted();
               }
             }}

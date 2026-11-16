@@ -1,16 +1,19 @@
 // Builds a small standalone plugin from selected records of a loaded plugin
 // (e.g. change a sword in Skyrim.esm, then export just that sword as an .esp override).
 // UI-free so it stays testable.
+import { resolveSubDef, visitFormIds } from "./decode";
 import { findSubDef } from "./defs";
 import {
   buildFormIdIndex,
   encodeZString,
   fileInfo,
   getEditorId,
+  getOriginalSubrecords,
   getSubrecords,
   markDirty,
   serializeEsp,
   walkRecords,
+  zstringValue,
   type EspFile,
   type EspGroup,
   type EspNode,
@@ -148,6 +151,70 @@ function rewriteLocalized(file: EspFile, records: EspRecord[], opts: ExtractOpti
   return out;
 }
 
+// ---------- records made in this session ----------
+//
+// A record made with New record or Copy exists only in the edited plugin. Written as an override of that plugin it would
+// point at nothing when the original plugin is the master. So it goes into the new plugin as a record of that plugin's
+// own: it gets a FormID of the new plugin, and every field that points at it is renumbered to match.
+
+/**
+ * The records made in this session among `records`, plus the ones they (and the other records) point at. A made record
+ * exists nowhere else, so whatever points at one must bring it along.
+ */
+export function newRecordsFor(file: EspFile, records: EspRecord[]): EspRecord[] {
+  const made = file.created;
+  if (!made || made.length === 0) return [];
+  const byId = new Map<number, EspRecord>(made.map((r) => [r.formId >>> 0, r]));
+  const localized = fileInfo(file).localized;
+  const out = new Set<EspRecord>();
+  const queue: EspRecord[] = [];
+  for (const r of records) {
+    queue.push(r);
+    if (byId.get(r.formId >>> 0) === r) out.add(r);
+  }
+  while (queue.length > 0) {
+    const r = queue.pop()!;
+    forEachFormIdRef(r, localized, ({ id }) => {
+      const target = byId.get(id >>> 0);
+      if (target && !out.has(target)) {
+        out.add(target);
+        queue.push(target);
+      }
+    });
+  }
+  return [...out];
+}
+
+/** Records plus the new records they need, each once. */
+function withNewRecords(file: EspFile, records: EspRecord[]): { all: EspRecord[]; made: EspRecord[] } {
+  const made = newRecordsFor(file, records);
+  const have = new Set(records);
+  return { all: [...records, ...made.filter((r) => !have.has(r))], made };
+}
+
+/** Subrecords with every FormID found in `idMap` replaced, or null if nothing changed. The record itself is not touched. */
+function renumberRefs(record: EspRecord, subs: Subrecord[], localized: boolean, idMap: Map<number, number>): Subrecord[] | null {
+  const edidSub = subs.find((x) => x.type === "EDID");
+  const edid = edidSub ? zstringValue(edidSub.data) : "";
+  let out: Subrecord[] | null = null;
+  subs.forEach((sub, i) => {
+    const def = resolveSubDef(record.type, sub, edid);
+    if (!def) return;
+    let data: Uint8Array | null = null;
+    visitFormIds(def, sub.data, 0, localized, (id, _field, at) => {
+      const to = idMap.get(id >>> 0);
+      if (to === undefined) return;
+      data ??= sub.data.slice();
+      new DataView(data.buffer, data.byteOffset, data.byteLength).setUint32(at, to, true);
+    });
+    if (data) {
+      out ??= subs.slice();
+      out[i] = { type: sub.type, data };
+    }
+  });
+  return out;
+}
+
 /** Records, in file order and original group nesting, ready to write into a plugin. */
 interface ExtractTree {
   nodes: EspNode[];
@@ -157,7 +224,7 @@ interface ExtractTree {
   weak: Set<EspRecord>;
 }
 
-function buildTree(file: EspFile, records: EspRecord[], opts: ExtractOptions, weakRecords: EspRecord[] = []): ExtractTree {
+function buildTree(file: EspFile, records: EspRecord[], opts: ExtractOptions, weakRecords: EspRecord[] = [], idMap: Map<number, number> = new Map()): ExtractTree {
   const picked = records.filter((r) => r.type !== "TES4");
   if (picked.length === 0) throw new Error("Select at least one record to extract.");
 
@@ -180,6 +247,7 @@ function buildTree(file: EspFile, records: EspRecord[], opts: ExtractOptions, we
   for (const r of picked) addOwners(r);
 
   const rewritten = rewriteLocalized(file, picked, opts);
+  const localizedFile = fileInfo(file).localized;
 
   let groupCount = 0;
   let recordCount = 0;
@@ -190,7 +258,12 @@ function buildTree(file: EspFile, records: EspRecord[], opts: ExtractOptions, we
     for (const n of nodes) {
       if (n.kind === "record") {
         if (included.has(n)) {
-          const clone = cloneRecord(n, parent, rewritten.get(n));
+          let subs = rewritten.get(n);
+          // Fields that point at a record made this session now point at its new FormID
+          if (idMap.size > 0) subs = renumberRefs(n, subs ?? n.subrecords ?? getOriginalSubrecords(n), localizedFile, idMap) ?? subs;
+          const clone = cloneRecord(n, parent, subs);
+          const renumbered = idMap.get(n.formId >>> 0);
+          if (renumbered !== undefined) clone.formId = renumbered;
           if (weakSource.has(n)) weak.add(clone);
           recordCount++;
           out.push(clone);
@@ -213,7 +286,12 @@ function buildTree(file: EspFile, records: EspRecord[], opts: ExtractOptions, we
 export function extractPlugin(file: EspFile, records: EspRecord[], opts: ExtractOptions = {}): Uint8Array {
   const sourceName = (opts.sourceName ?? file.name).trim();
   if (!sourceName) throw new Error("Enter the name of the plugin these records come from.");
-  const tree = buildTree(file, records, opts);
+  const { all, made } = withNewRecords(file, records);
+  // The new plugin lists the source's masters, then the source, so its own FormIDs start at the next slot. Records made in
+  // this session keep their ID inside that slot.
+  const own = fileInfo(file).masters.length + 1;
+  const idMap = new Map<number, number>(made.map((r) => [r.formId >>> 0, ((own << 24) | (r.formId & 0xffffff)) >>> 0]));
+  const tree = buildTree(file, all, opts, [], idMap);
   const header = buildHeader(file, sourceName, tree.recordCount + tree.groupCount, opts.author ?? "Skyrim ESP Editor");
   return serializeEsp({ name: "extract.esp", nodes: [header, ...tree.nodes] });
 }
@@ -324,6 +402,8 @@ export interface MergeResult {
   /** Records skipped because the patch already had them (kept as they were). */
   kept: number;
   mastersAdded: string[];
+  /** Records made this session that went into the patch as new records of its own. */
+  newRecords: number;
 }
 
 const sameLabel = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
@@ -344,7 +424,26 @@ export function mergeIntoPlugin(target: EspFile, source: EspFile, records: EspRe
   const plan = planMasters(target, source, sourceName);
   if (!plan.ok) throw new Error(plan.reason);
 
-  const tree = buildTree(source, records, opts, opts.weak);
+  // Records made this session become new records of the patch, with IDs the patch does not use yet
+  const { all, made } = withNewRecords(source, records);
+  const ownSlot = fileInfo(target).masters.length + plan.add.length;
+  const idMap = new Map<number, number>();
+  let lastNewId = 0;
+  if (made.length > 0) {
+    const used = new Set<number>();
+    for (const r of walkRecords(target.nodes)) if (r.type !== "TES4" && r.formId >>> 24 === ownSlot) used.add(r.formId & 0xffffff);
+    const tHedr = getSubrecords(target.nodes[0] as EspRecord).find((x) => x.type === "HEDR");
+    let next = tHedr && tHedr.data.length >= 12 ? new DataView(tHedr.data.buffer, tHedr.data.byteOffset, tHedr.data.byteLength).getUint32(8, true) & 0xffffff : 0x800;
+    if (next < 0x800) next = 0x800;
+    for (const r of made) {
+      while (used.has(next)) next++;
+      if (next > 0xffffff) throw new Error("The patch has run out of FormIDs");
+      idMap.set(r.formId >>> 0, ((ownSlot << 24) | next) >>> 0);
+      used.add(next);
+      lastNewId = next;
+    }
+  }
+  const tree = buildTree(source, all, opts, opts.weak, idMap);
   const replaceExisting = opts.replaceExisting ?? true;
   const stats = { added: 0, replaced: 0, kept: 0 };
 
@@ -391,10 +490,12 @@ export function mergeIntoPlugin(target: EspFile, source: EspFile, records: EspRe
   }
   const hedr = subs.find((s) => s.type === "HEDR");
   if (hedr && hedr.data.length >= 8) {
-    new DataView(hedr.data.buffer, hedr.data.byteOffset, hedr.data.byteLength).setInt32(4, countNodes(target.nodes.slice(1)), true);
+    const dv = new DataView(hedr.data.buffer, hedr.data.byteOffset, hedr.data.byteLength);
+    dv.setInt32(4, countNodes(target.nodes.slice(1)), true);
+    if (lastNewId > 0 && hedr.data.length >= 12 && (dv.getUint32(8, true) & 0xffffff) <= lastNewId) dv.setUint32(8, (dv.getUint32(8, true) & 0xff000000) | (lastNewId + 1), true);
   }
 
-  return { bytes: serializeEsp(target), ...stats, mastersAdded: plan.add };
+  return { bytes: serializeEsp(target), ...stats, mastersAdded: plan.add, newRecords: made.length };
 }
 
 function countRecordsIn(g: EspGroup): number {

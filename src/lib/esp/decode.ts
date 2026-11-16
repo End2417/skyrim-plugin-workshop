@@ -196,7 +196,7 @@ function decodeField(def: FieldDef, data: Uint8Array, o: number, ctx: DecodeCont
  * Mirrors decodeField's sizing but builds no display nodes, so it stays cheap on whole plugins.
  * Returns the bytes consumed, or null when the data ends before the field.
  */
-export function visitFormIds(def: FieldDef, data: Uint8Array, o: number, localized: boolean, visit: (id: number, field: string) => void): number | null {
+export function visitFormIds(def: FieldDef, data: Uint8Array, o: number, localized: boolean, visit: (id: number, field: string, at: number) => void): number | null {
   const remaining = data.length - o;
   if (def.k === "struct") {
     let p = o;
@@ -227,7 +227,7 @@ export function visitFormIds(def: FieldDef, data: Uint8Array, o: number, localiz
     size = fixedSize(def, localized)!;
   }
   if (size > remaining || (remaining <= 0 && size > 0)) return null;
-  if (def.k === "fid") visit(new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(o, true), def.n);
+  if (def.k === "fid") visit(new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(o, true), def.n, o);
   return size;
 }
 

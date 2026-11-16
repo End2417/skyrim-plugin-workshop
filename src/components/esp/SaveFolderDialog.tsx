@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { FolderCog } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { autoBackupEnabled, setAutoBackup } from "@/lib/esp/backup";
+import { APP_FOLDER } from "@/lib/variant";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { chooseSaveFolder, clearSaveFolder, getSaveFolder, nativeFilesAvailable, usableSaveFolder, type SaveFolder } from "@/lib/native/espFiles";
 
@@ -28,6 +31,7 @@ function SaveFolderForm() {
   const [stale, setStale] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const available = nativeFilesAvailable();
+  const [backup, setBackup] = useState(() => autoBackupEnabled());
 
   useEffect(() => {
     if (!folder || !available) return;
@@ -76,11 +80,11 @@ function SaveFolderForm() {
         <div className="space-y-3 text-sm">
           <p>
             <span className="text-muted-foreground">Current: </span>
-            <span className="break-words font-medium">{folder ? folder.name : "Documents/ESP Editor (default)"}</span>
+            <span className="break-words font-medium">{folder ? folder.name : `Documents/${APP_FOLDER} (default)`}</span>
           </p>
           {stale && (
             <p role="alert" className="text-destructive">
-              Android no longer allows saving to this folder, so files go to Documents/ESP Editor instead. Choose it again to restore access.
+              Android no longer allows saving to this folder, so files go to Documents/{APP_FOLDER} instead. Choose it again to restore access.
             </p>
           )}
           <p className="text-xs text-muted-foreground">
@@ -92,6 +96,23 @@ function SaveFolderForm() {
               {error}
             </p>
           )}
+          <label className="flex items-start gap-3 rounded-md border p-3">
+            <Switch
+              checked={backup}
+              onCheckedChange={(on) => {
+                setBackup(on);
+                setAutoBackup(on);
+              }}
+              aria-label="Back up the original before saving"
+            />
+            <span className="space-y-1">
+              <span className="block font-medium">Back up the original before saving</span>
+              <span className="block text-xs text-muted-foreground">
+                The first time you save a plugin, a copy of the file exactly as you opened it is saved next to it as <span className="font-mono">Name.esp.bak</span>. The
+                .bak ending keeps the game from loading it as a plugin.
+              </span>
+            </span>
+          </label>
           <div className="flex flex-wrap gap-2">
             <Button onClick={choose}>Choose folder…</Button>
             {folder && (

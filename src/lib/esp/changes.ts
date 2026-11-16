@@ -59,11 +59,23 @@ export function diffRecord(r: EspRecord, ctx: DecodeContext): FieldChange[] {
   }
 
   const edid = getEditorId(r) ?? "";
-  const before = keyed(getOriginalSubrecords(r));
-  const after = keyed(getSubrecords(r));
+  return [...changes, ...diffSubrecordLists(r.type, edid, getOriginalSubrecords(r), getSubrecords(r), ctx, MAX_CHANGES_PER_RECORD - changes.length)];
+}
+
+/**
+ * Field-by-field differences between two versions of a record's subrecords, with every value shown as the editor shows it.
+ * Also used to compare a record with the same record in another plugin.
+ */
+export function diffSubrecordLists(recordType: string, edid: string, beforeSubs: Subrecord[], afterSubs: Subrecord[], ctx: DecodeContext, limit = MAX_CHANGES_PER_RECORD): FieldChange[] {
+  const changes: FieldChange[] = [];
+  const push = (c: FieldChange) => {
+    if (changes.length < limit) changes.push(c);
+  };
+  const before = keyed(beforeSubs);
+  const after = keyed(afterSubs);
   const decode = (s: Subrecord) => {
     const map = new Map<string, string>();
-    const node = decodeSubrecord(r.type, s, edid, ctx);
+    const node = decodeSubrecord(recordType, s, edid, ctx);
     flatten(node, node.label, map);
     return { node, map };
   };

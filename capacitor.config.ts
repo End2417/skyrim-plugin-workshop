@@ -7,7 +7,7 @@ const config: CapacitorConfig = {
   webDir: process.env.CAP_WEB_DIR ?? "dist/client",
   server: { androidScheme: "https" },
   android: {
-    backgroundColor: "#152846",
+    backgroundColor: "#121218",
     // Android 15+ draws apps under the status bar; keep the web view below it.
     adjustMarginsForEdgeToEdge: "force",
   },

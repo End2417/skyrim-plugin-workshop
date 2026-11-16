@@ -7,7 +7,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Input } from "@/components/ui/input";
 import { downloadPlugin } from "@/lib/esp/download";
 import { convertToLe, detectEdition } from "@/lib/esp/convert";
-import { extractPlugin, fieldKey, findDependencies, findLocalizedFields, listChangedRecords, mergeIntoPlugin, planMasters } from "@/lib/esp/extract";
+import { extractPlugin, fieldKey, findDependencies, findLocalizedFields, listChangedRecords, mergeIntoPlugin, newRecordsFor, planMasters } from "@/lib/esp/extract";
 import { lookupString } from "@/lib/esp/strings";
 import { buildFormIdIndex, getEditorId, hex8, parseEsp, type EspFile, type EspRecord } from "@/lib/esp/format";
 
@@ -67,6 +67,9 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
   const all = [...chosen, ...chosenDeps];
   const localized = useMemo(() => findLocalizedFields(file, all), [file, all.length, picked, skipped, includeDeps, depth]); // eslint-disable-line react-hooks/exhaustive-deps
   const plan = useMemo(() => (dest === "patch" && patch ? planMasters(patch.file, file, sourceName.trim()) : null), [dest, patch, file, sourceName]);
+  // Records made with New record or Copy, which go along as new records of the result (see lib/esp/extract.ts)
+  const madeRecords = useMemo(() => newRecordsFor(file, all), [file, all.length, picked, skipped, includeDeps, depth]); // eslint-disable-line react-hooks/exhaustive-deps
+  const madeNeeded = madeRecords.filter((r) => !all.includes(r));
 
   function toggle(r: EspRecord, on: boolean) {
     const next = new Set(picked);
@@ -110,7 +113,7 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
         bytes = result.bytes;
         name = patch.name;
         summary =
-          `Added ${result.added}, replaced ${result.replaced}` +
+          `Added ${result.added}${result.newRecords ? ` (${result.newRecords} of them new records of the patch)` : ""}, replaced ${result.replaced}` +
           `${result.kept ? `, kept ${result.kept} the patch already had` : ""}` +
           `${result.mastersAdded.length ? `. ${result.mastersAdded.join(", ")} was added to its masters` : ""}`;
       } else {
@@ -170,7 +173,7 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
               <label htmlFor={`ex-${r.uid}`} className="min-w-0 flex-1 cursor-pointer truncate font-mono text-xs">
                 {label(r)}
               </label>
-              <span className="text-xs text-muted-foreground">{r.dirty ? "edited" : "unchanged"}</span>
+              <span className="text-xs text-muted-foreground">{file.created?.includes(r) ? "new" : r.dirty ? "edited" : "unchanged"}</span>
             </li>
           ))}
         </ul>
@@ -316,6 +319,16 @@ function ExtractForm({ file, selected }: { file: EspFile; selected: EspRecord | 
       <p className="-mt-2 text-xs text-muted-foreground">
         The source plugin must be named exactly as it appears in your game's Data folder (for example Skyrim.esm).
       </p>
+
+      {madeRecords.length > 0 && (
+        <p className="rounded-md border p-3 text-sm text-muted-foreground">
+          {madeRecords.length} new record{madeRecords.length === 1 ? "" : "s"} (made with New record or Copy) {madeRecords.length === 1 ? "goes" : "go"} into the result as
+          new record{madeRecords.length === 1 ? "" : "s"} of its own, with new FormIDs, not as overrides of {sourceName || "the source plugin"}.
+          {madeNeeded.length > 0 &&
+            ` ${madeNeeded.length} of them ${madeNeeded.length === 1 ? "is" : "are"} added because a chosen record points at ${madeNeeded.length === 1 ? "it" : "them"}.`}{" "}
+          References to them are renumbered in fields the editor has a layout for.
+        </p>
+      )}
 
       {localized.length > 0 && (
         <div className="space-y-2 rounded-md border p-3">

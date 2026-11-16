@@ -734,6 +734,77 @@ export const RECORD_DEFS: Record<string, RecordDef> = {
   },
   RACE: { name: "Race", subs: { SPCT: COMMON["SPCT"]!, SPLO: COMMON["SPLO"]! } },
   WRLD: { name: "Worldspace", subs: { WNAM: sub("Parent Worldspace", fid("Worldspace")), CNAM: sub("Climate", fid("Climate")), NAM2: sub("Water", fid("Water")) } },
+
+  // ---- more layouts (sizes checked in defs.more.test.ts) ----
+  VTYP: { name: "Voice Type", subs: { DNAM: sub("Flags", u8("Flags", { flags: ["Allow Default Dialog", "Female"] })) } },
+  EQUP: { name: "Equip Type", subs: { PNAM: sub("Slot Parents", array("Slot Parents", fid("Slot"))) } },
+  LCRT: { name: "Location Reference Type", subs: { CNAM: sub("Color", struct("Color", [u8("Red"), u8("Green"), u8("Blue"), u8("Alpha")])) } },
+  AACT: { name: "Action", subs: { CNAM: sub("Color", struct("Color", [u8("Red"), u8("Green"), u8("Blue"), u8("Alpha")])) } },
+  TXST: {
+    name: "Texture Set",
+    subs: {
+      TX00: sub("Color / Diffuse", str("FileName")),
+      TX01: sub("Normal / Gloss", str("FileName")),
+      TX02: sub("Environment Mask / Subsurface Tint", str("FileName")),
+      TX03: sub("Glow / Detail Map", str("FileName")),
+      TX04: sub("Height", str("FileName")),
+      TX05: sub("Environment", str("FileName")),
+      TX06: sub("Multilayer", str("FileName")),
+      TX07: sub("Backlight Mask / Specular", str("FileName")),
+      DNAM: sub("Flags", u16("Flags", { flags: ["No Specular Map", "Facegen Textures", "Has Model Space Normal Map"] })),
+    },
+  },
+  ECZN: {
+    name: "Encounter Zone",
+    subs: {
+      DATA: sub(
+        "Data",
+        struct("Data", [fid("Owner"), fid("Location"), i8("Rank"), i8("Minimum Level"), u8("Flags", { flags: ["Never Resets", "Match PC Below Minimum Level", "Disable Combat Boundary"] }), i8("Max Level")]),
+      ),
+    },
+  },
+  SHOU: {
+    name: "Shout",
+    subs: {
+      MDOB: sub("Menu Display Object", fid("Static")),
+      SNAM: sub("Word", struct("Word", [fid("Word"), fid("Spell"), f32("Recovery Time")])),
+    },
+  },
+  WOOP: { name: "Word of Power", subs: { TNAM: sub("Translation", lstr("Translation")) } },
+  AVIF: {
+    name: "Actor Value Information",
+    subs: {
+      ANAM: sub("Abbreviation", str("Abbreviation")),
+      CNAM: sub("Unknown", u32("Unknown", { hex: true })),
+      AVSK: sub("Skill", struct("Skill", [f32("Skill Use Mult"), f32("Skill Offset"), f32("Skill Improve Mult"), f32("Skill Improve Offset")])),
+    },
+  },
+  SNCT: {
+    name: "Sound Category",
+    subs: {
+      FNAM: sub("Flags", u32("Flags", { flags: ["Mute When Submerged", "Should Appear on Menu"] })),
+      PNAM: sub("Parent", fid("Parent Category")),
+      VNAM: sub("Default Menu Value", u16("Default Menu Value")),
+      UNAM: sub("Static Volume Multiplier", u16("Static Volume Multiplier")),
+    },
+  },
+  DLBR: {
+    name: "Dialog Branch",
+    subs: {
+      QNAM: sub("Quest", fid("Quest")),
+      TNAM: sub("Category", u32("Category")),
+      DNAM: sub("Flags", u32("Flags", { flags: ["Top-Level", "Blocking", "Exclusive"] })),
+      SNAM: sub("Starting Topic", fid("Starting Topic")),
+    },
+  },
+  ADDN: {
+    name: "Addon Node",
+    subs: {
+      DATA: sub("Node Index", u32("Node Index")),
+      SNAM: sub("Sound", fid("Sound")),
+      DNAM: sub("Data", struct("Data", [u16("Master Particle System Cap"), u16("Flags", { hex: true })])),
+    },
+  },
 };
 
 /** Group/record signature to readable name, as shown in TES5Edit's tree. */

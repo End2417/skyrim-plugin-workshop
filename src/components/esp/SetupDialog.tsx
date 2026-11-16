@@ -3,7 +3,7 @@ import { FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { importMasterFiles, importMasterSources, type FileSource, type ImportResult } from "@/lib/esp/masterImport";
-import { defaultLanguage, scanSkyrimFolder } from "@/lib/esp/skyrimFolder";
+import { defaultLanguage, findInterfaceArchive, scanSkyrimFolder } from "@/lib/esp/skyrimFolder";
 import { chooseSkyrimFolder, listFolder, nativeFilesAvailable, readFolderFile, usableSkyrimFolder, type SaveFolder } from "@/lib/native/espFiles";
 
 interface Props {
@@ -33,7 +33,14 @@ export function SetupDialog({ open, onOpenChange }: Props) {
   // Several imports add up: a file imported again replaces its earlier entry
   function addResult(r: ImportResult) {
     setResult((prev) =>
-      prev ? { masters: [...prev.masters.filter((m) => !r.masters.some((n) => n.name === m.name)), ...r.masters], ignored: r.ignored, orphanStrings: r.orphanStrings } : r,
+      prev
+        ? {
+            masters: [...prev.masters.filter((m) => !r.masters.some((n) => n.name === m.name)), ...r.masters],
+            ignored: r.ignored,
+            archives: [...prev.archives.filter((a) => !r.archives.some((n) => n.name === a.name)), ...r.archives],
+            orphanStrings: r.orphanStrings,
+          }
+        : r,
     );
   }
 
@@ -67,11 +74,21 @@ export function SetupDialog({ open, onOpenChange }: Props) {
       const language = defaultLanguage(scan.strings);
       const entries = [...scan.plugins, ...(language ? (scan.strings.get(language) ?? []) : [])];
       const sources: FileSource[] = entries.map((e) => ({ name: e.name, read: () => readFolderFile(e) }));
-      addResult(await importMasterSources(sources, setStatus));
+      // No extracted strings: the game keeps them inside Skyrim - Interface.bsa, which is only opened if a plugin needs it
+      const archive = language ? null : findInterfaceArchive(scan);
+      if (archive) sources.push({ name: archive.name, read: () => readFolderFile(archive) });
+      const imported = await importMasterSources(sources, setStatus);
+      addResult(imported);
+      const used = imported.archives.find((a) => a.strings > 0);
+      const failed = imported.archives.find((a) => a.problem);
       setNote(
         language
           ? `Names are in ${language}.`
-          : "No loose strings files were found (Skyrim keeps them inside Skyrim - Interface.bsa unless they have been extracted), so records show Editor IDs without names. You can add extracted strings files with Choose files.",
+          : used
+            ? `Names were read from ${used.name}.`
+            : failed
+              ? `Could not read ${failed.name}: ${failed.problem}. Records show Editor IDs without names; you can add extracted strings files with Choose files.`
+              : "No loose strings files were found and no strings were needed from Skyrim - Interface.bsa, so records may show Editor IDs without names. You can add extracted strings files, or the .bsa itself, with Choose files.",
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -138,6 +155,9 @@ export function SetupDialog({ open, onOpenChange }: Props) {
               <span className="font-mono">Skyrim_English.STRINGS</span>, <span className="font-mono">.DLSTRINGS</span> and <span className="font-mono">.ILSTRINGS</span>. They hold
               the names.
             </li>
+            <li>
+              Or, if the strings were never extracted, <span className="font-mono">Skyrim - Interface.bsa</span> from the Data folder. The app takes the strings out of it.
+            </li>
           </ul>
           <p className="text-xs text-muted-foreground">
             You can select them all in one go. Android only lets the app see files you choose, so it cannot look through your folders on its own. Only IDs, names and
@@ -149,7 +169,7 @@ export function SetupDialog({ open, onOpenChange }: Props) {
           ref={input}
           type="file"
           multiple
-          accept=".esp,.esm,.esl,.strings,.dlstrings,.ilstrings,application/octet-stream"
+          accept=".esp,.esm,.esl,.strings,.dlstrings,.ilstrings,.bsa,application/octet-stream"
           className="hidden"
           onChange={(e) => {
             void pick(Array.from(e.target.files ?? []));
@@ -176,6 +196,11 @@ export function SetupDialog({ open, onOpenChange }: Props) {
               </p>
             ))}
             {result.masters.length === 0 && <p>No plugin was picked. Pick the plugin (for example Skyrim.esm) together with its strings files.</p>}
+            {result.archives.map((a) => (
+              <p key={a.name}>
+                <span className="font-mono">{a.name}</span>: {a.problem ? `could not be read (${a.problem})` : `${a.strings} strings file${a.strings === 1 ? "" : "s"} used`}
+              </p>
+            ))}
             {result.orphanStrings.length > 0 && <p>These strings files need their plugin picked with them: {result.orphanStrings.join(", ")}.</p>}
             {note && <p>{note}</p>}
             {result.ignored.length > 0 && <p>Ignored (not plugins or strings files): {result.ignored.join(", ")}.</p>}

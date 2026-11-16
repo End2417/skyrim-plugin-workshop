@@ -60,6 +60,8 @@ export interface EspFile {
   nodes: EspNode[];
   /** Keys (see recordKey) of records deleted in this session, so a draft can repeat the deletions. */
   deleted?: string[];
+  /** Records made in this session (new or copied), so a draft can bring them back. */
+  created?: EspRecord[];
 }
 
 let uidCounter = 0;
@@ -176,8 +178,16 @@ export function getSubrecords(r: EspRecord): Subrecord[] {
   return r.subrecords;
 }
 
+let beforeMutate: ((r: EspRecord) => void) | null = null;
+
+/** Lets the undo history see a record just before it is changed. Pass null to stop. Only one listener at a time. */
+export function setMutationObserver(fn: ((r: EspRecord) => void) | null) {
+  beforeMutate = fn;
+}
+
 /** Call before mutating a record's header or subrecords. */
 export function markDirty(r: EspRecord) {
+  beforeMutate?.(r);
   getSubrecords(r);
   if (!r.dirty && !r.original) {
     r.original = { flags: r.flags, formId: r.formId, stamp: r.stamp, version: r.version, unknown: r.unknown };
@@ -438,7 +448,9 @@ export function deleteRecord(file: EspFile, r: EspRecord) {
   const i = list.indexOf(r);
   if (i < 0) return;
   list.splice(i, 1);
-  (file.deleted ??= []).push(recordKey(r));
+  const made = file.created?.indexOf(r) ?? -1;
+  if (made >= 0) file.created!.splice(made, 1); // a record made this session was never in the opened file: nothing to repeat
+  else (file.deleted ??= []).push(recordKey(r));
   const tes4 = file.nodes[0];
   if (tes4 && tes4.kind === "record" && tes4 !== r) {
     const hedr = getSubrecords(tes4).find((s) => s.type === "HEDR");

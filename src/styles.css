@@ -22,6 +22,8 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary-container: var(--secondary-container);
+  --color-secondary-container-foreground: var(--secondary-container-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
@@ -37,29 +39,39 @@
   --color-warning: var(--warning);
 }
 
-/* Dark, frost-and-iron palette with a dull gold accent. */
+/*
+ * Dark periwinkle palette, taken from the Skyrim Mod Manager screenshots (Material-style dark scheme):
+ * page #121218, cards #1e1e24, dialogs #222430, primary #b6cafe with #00123a on it,
+ * text #fdfbff / #cbcbd7, text-field outline #a2a2ac, delete #f2b8b5.
+ * Not visible in the screenshots, so derived to fit: --border, --muted, --accent, --secondary, --destructive-foreground.
+ * Secondary buttons are a medium periwinkle (#44538a, light text), not the screenshots' gray #8a90a6: on a dark dialog that
+ * gray looked like a disabled button.
+ * The green "unsaved" and amber warning colors are status colors and are unchanged.
+ */
 :root {
   --radius: 0.375rem;
-  --background: oklch(0.17 0.01 250);
-  --foreground: oklch(0.92 0.015 85);
-  --card: oklch(0.21 0.012 250);
-  --card-foreground: oklch(0.92 0.015 85);
-  --popover: oklch(0.21 0.012 250);
-  --popover-foreground: oklch(0.92 0.015 85);
-  --primary: oklch(0.76 0.12 80);
-  --primary-foreground: oklch(0.18 0.02 70);
-  --secondary: oklch(0.27 0.014 250);
-  --secondary-foreground: oklch(0.92 0.015 85);
-  --muted: oklch(0.25 0.012 250);
-  --muted-foreground: oklch(0.66 0.02 250);
-  --accent: oklch(0.3 0.02 250);
-  --accent-foreground: oklch(0.95 0.015 85);
-  --destructive: oklch(0.6 0.19 27);
-  --destructive-foreground: oklch(0.97 0.01 85);
-  --border: oklch(0.32 0.015 250);
-  --input: oklch(0.34 0.015 250);
-  --ring: oklch(0.76 0.12 80);
-  --selected: oklch(0.76 0.12 80 / 18%);
+  --background: #121218;
+  --foreground: #fdfbff;
+  --card: #1e1e24;
+  --card-foreground: #fdfbff;
+  --popover: #222430;
+  --popover-foreground: #fdfbff;
+  --primary: #b6cafe;
+  --primary-foreground: #00123a;
+  --secondary: #2b2c36;
+  --secondary-foreground: #fdfbff;
+  --secondary-container: #44538a;
+  --secondary-container-foreground: #e8ecff;
+  --muted: #2b2c36;
+  --muted-foreground: #cbcbd7;
+  --accent: #2f3140;
+  --accent-foreground: #fdfbff;
+  --destructive: #f2b8b5;
+  --destructive-foreground: #601410;
+  --border: #3f3f48;
+  --input: #a2a2ac;
+  --ring: #b6cafe;
+  --selected: #b6cafe2e;
   --modified: oklch(0.78 0.14 150);
   --warning: oklch(0.8 0.14 70);
 }

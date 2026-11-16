@@ -1,11 +1,19 @@
 // Autosaved drafts: Android may close the app in the background, which would lose unsaved edits.
 // A draft stores only what changed, keyed by the file it came from, and is applied on reopening it.
 import { deleteRecord, getSubrecords, markDirty, recordKey, walkRecords, type EspFile, type EspRecord, type Subrecord } from "./format";
+import { insertCreated } from "./records";
 
 export interface DraftRecord {
   key: string;
   header: { flags: number; formId: number; stamp: number; version: number; unknown: number };
   subs: { type: string; data: string }[];
+}
+
+/** A record made in the session (new or copied): everything needed to make it again. */
+export interface DraftCreated {
+  type: string;
+  header: DraftRecord["header"];
+  subs: DraftRecord["subs"];
 }
 
 export interface Draft {
@@ -15,6 +23,8 @@ export interface Draft {
   savedAt: number;
   records: DraftRecord[];
   deleted: string[];
+  /** Records made in the session. Absent in drafts saved by older versions. */
+  created?: DraftCreated[];
 }
 
 const PREFIX = "esp-editor-draft:";
@@ -39,7 +49,17 @@ function fromBase64(text: string): Uint8Array {
 /** Everything edited so far, or null when there are no edits. */
 export function makeDraft(file: EspFile, sig: string): Draft | null {
   const records: DraftRecord[] = [];
+  const made = new Set(file.created ?? []);
+  const created: DraftCreated[] = [];
   for (const r of walkRecords(file.nodes)) {
+    if (made.has(r)) {
+      created.push({
+        type: r.type,
+        header: { flags: r.flags, formId: r.formId, stamp: r.stamp, version: r.version, unknown: r.unknown },
+        subs: getSubrecords(r).map((s) => ({ type: s.type, data: toBase64(s.data) })),
+      });
+      continue;
+    }
     if (!r.dirty) continue;
     records.push({
       key: recordKey(r),
@@ -48,8 +68,8 @@ export function makeDraft(file: EspFile, sig: string): Draft | null {
     });
   }
   const deleted = file.deleted ?? [];
-  if (records.length === 0 && deleted.length === 0) return null;
-  return { v: 1, sig, name: file.name, savedAt: Date.now(), records, deleted: [...deleted] };
+  if (records.length === 0 && deleted.length === 0 && created.length === 0) return null;
+  return { v: 1, sig, name: file.name, savedAt: Date.now(), records, deleted: [...deleted], ...(created.length ? { created } : {}) };
 }
 
 /** Repeats the draft's deletions and edits on a freshly opened copy of the same file. */
@@ -79,6 +99,10 @@ export function applyDraft(file: EspFile, draft: Draft): { applied: number; miss
     r.version = d.header.version;
     r.unknown = d.header.unknown;
     r.subrecords = d.subs.map((s): Subrecord => ({ type: s.type, data: fromBase64(s.data) }));
+    applied++;
+  }
+  for (const c of draft.created ?? []) {
+    insertCreated(file, c.type, c.header, c.subs.map((s): Subrecord => ({ type: s.type, data: fromBase64(s.data) })));
     applied++;
   }
   return { applied, missing };

@@ -72,6 +72,14 @@ export async function scanSkyrimFolder(list: ListFolder): Promise<SkyrimScan | n
   return { dataPath, dataEntries: root.entries, plugins, strings };
 }
 
+/** Where the game keeps its strings files unless they have been extracted into Data/Strings. */
+export const INTERFACE_ARCHIVE = "Skyrim - Interface.bsa";
+
+/** Skyrim's interface archive, if it is in the Data folder. */
+export function findInterfaceArchive(scan: SkyrimScan): FolderItem | null {
+  return scan.dataEntries.find((e) => !e.dir && e.name.toLowerCase() === INTERFACE_ARCHIVE.toLowerCase()) ?? null;
+}
+
 /** The files in the Data folder with these plugin names (ignoring case), and the names that are not there. */
 export function findPluginsByName(scan: SkyrimScan, names: string[]): { found: FolderItem[]; missing: string[] } {
   const found: FolderItem[] = [];

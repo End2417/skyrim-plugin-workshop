@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, ArrowLeftRight, ArrowUp, Download, FolderCog, FolderOpen, Info, ListChecks, PackageOpen, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowLeftRight, ArrowUp, Download, FileCode, FolderCog, FolderOpen, GitCompare, Info, ListChecks, PackageOpen, Redo2, ShieldCheck, SlidersHorizontal, Undo2, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import type { DecodeContext } from "@/lib/esp/decode";
-import { downloadPlugin } from "@/lib/esp/download";
+import { backupOriginal, downloadPlugin } from "@/lib/esp/download";
+import { autoBackupEnabled, BackupLedger } from "@/lib/esp/backup";
+import { chooseLanguage, listArchiveStrings, parseBsa, pluginBase, readBsaFile, stringsFileName } from "@/lib/esp/bsa";
+import { isArchiveFileName } from "@/lib/esp/masterImport";
+import { APP_TITLE, IS_TEST_BUILD } from "@/lib/variant";
 import { onFileOpened, readOpenedFile, takePendingFile, type OpenedFile } from "@/lib/native/espFiles";
 import { buildSearchIndex, filterIndex, hasFieldQuery, searchIndex, type SearchIndex } from "@/lib/esp/search";
 import { applyDraft, clearDraft, fileSignature, loadDraft, makeDraft, saveDraft, type Draft } from "@/lib/esp/draft";
@@ -16,8 +21,9 @@ import {
   setActiveStrings,
   type StringTable,
 } from "@/lib/esp/strings";
+import { History } from "@/lib/esp/history";
+import { revertWithHistory } from "@/lib/esp/records";
 import {
-  revertRecord,
   buildFormIdIndex,
   countRecords,
   describeGroup,
@@ -33,8 +39,15 @@ import {
   type EspRecord,
 } from "@/lib/esp/format";
 import { AboutDialog, useFirstLaunchAbout } from "./AboutDialog";
+import { UpdateDialog, useUpdateCheck } from "./UpdateDialog";
 import { ChangesDialog } from "./ChangesDialog";
 import { CheckDialog } from "./CheckDialog";
+import { CompareDialog } from "./CompareDialog";
+import { ScriptsDialog } from "./ScriptsDialog";
+import { HeaderDialog } from "./HeaderDialog";
+import { HealthDialog } from "./HealthDialog";
+import { LoadOrderDialog } from "./LoadOrderDialog";
+import { NewRecordDialog } from "./NewRecordDialog";
 import { BulkEditDialog } from "./BulkEditDialog";
 import { ConvertDialog } from "./ConvertDialog";
 import { SetupDialog } from "./SetupDialog";
@@ -58,10 +71,23 @@ export function EspEditor() {
   const [selected, setSelected] = useState<EspRecord | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  const [saveFeedback, setSaveFeedback] = useState<{ failed: boolean; filename: string; detail?: string; savedTo?: string } | null>(null);
+  const [saveFeedback, setSaveFeedback] = useState<{ failed: boolean; filename: string; detail?: string; savedTo?: string; backup?: string; backupError?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [extractOpen, setExtractOpen] = useState(false);
   const [checkOpen, setCheckOpen] = useState(false);
+  const [scriptsOpen, setScriptsOpen] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [headerOpen, setHeaderOpen] = useState(false);
+  const [healthOpen, setHealthOpen] = useState(false);
+  const [orderOpen, setOrderOpen] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
+  /** The record the "new record" dialog copies, or null to make an empty one. */
+  const [copySource, setCopySource] = useState<EspRecord | null>(null);
+  // Undo and redo for edits, created and deleted records (see lib/esp/history.ts)
+  const [history] = useState(() => new History());
+  // The file exactly as it was opened, for "back up the original before saving". It shares memory with the parsed records.
+  const originalRef = useRef<{ name: string; bytes: Uint8Array } | null>(null);
+  const backupLedger = useRef(new BackupLedger());
   const [convertOpen, setConvertOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -72,6 +98,8 @@ export function EspEditor() {
   const [indexedFile, setIndexedFile] = useState<EspFile | null>(null);
   const [shown, setShown] = useState(PAGE_SIZE);
   const [aboutOpen, setAboutOpen] = useFirstLaunchAbout();
+  // Newer release on GitHub? Only in the Android app, and not in the test app (which has versions of its own)
+  const update = useUpdateCheck(native && !IS_TEST_BUILD);
   const [changesOpen, setChangesOpen] = useState(false);
   const [strings, setStrings] = useState<StringTable | null>(null);
   const [stringsMsg, setStringsMsg] = useState<string | null>(null);
@@ -215,14 +243,33 @@ export function EspEditor() {
     if (!file || list.length === 0) return;
     setStringsMsg(null);
     try {
+      const notes: string[] = [];
       for (const f of list) {
         const bytes = new Uint8Array(await f.arrayBuffer());
+        if (isArchiveFileName(f.name)) {
+          // A BSA (such as Skyrim - Interface.bsa): take this plugin's strings files out of it
+          const archive = parseBsa(bytes);
+          const mine = listArchiveStrings(archive).filter((s) => s.plugin === pluginBase(file.name));
+          const language = chooseLanguage(mine.map((s) => s.language));
+          const picked = mine.filter((s) => s.language === language);
+          if (picked.length === 0) notes.push(`${f.name} has no strings files for ${file.name}.`);
+          for (const s of picked) {
+            const name = stringsFileName(file.name, s);
+            const data = readBsaFile(archive, s.entry);
+            stringPartsRef.current.set(name, { name, strings: parseStringsFile(name, data), bytes: data });
+          }
+          continue;
+        }
         stringPartsRef.current.set(f.name, { name: f.name, strings: parseStringsFile(f.name, bytes), bytes });
       }
       rebuildStrings();
       const parts = [...stringPartsRef.current.values()];
-      const kept = await rememberStringFiles(file.name, parts.map((p) => ({ name: p.name, bytes: p.bytes })));
-      setStringsMsg(`Loaded ${parts.length} strings file${parts.length === 1 ? "" : "s"}.${kept ? " They will be remembered on this device." : ""}`);
+      const kept = parts.length > 0 && (await rememberStringFiles(file.name, parts.map((p) => ({ name: p.name, bytes: p.bytes }))));
+      setStringsMsg(
+        parts.length === 0
+          ? notes.join(" ")
+          : `Loaded ${parts.length} strings file${parts.length === 1 ? "" : "s"}.${kept ? " They will be remembered on this device." : ""}${notes.length ? ` ${notes.join(" ")}` : ""}`,
+      );
     } catch (e) {
       setStringsMsg(e instanceof Error ? e.message : String(e));
     }
@@ -237,13 +284,37 @@ export function EspEditor() {
 
   // ----- undo, drafts -----
   function revert(r: EspRecord) {
-    if (revertRecord(r)) changed({ reindex: true });
+    if (file && revertWithHistory(history, file, r)) changed({ reindex: true });
+  }
+
+  /** After an undo or redo the selected record may have been made or removed by it. */
+  function stillInFile(r: EspRecord): boolean {
+    if (!file) return false;
+    return r.parent ? r.parent.children.includes(r) : file.nodes.includes(r);
+  }
+
+  function undo() {
+    if (!history.undo()) return;
+    changed({ reindex: true });
+    if (file && selected && !stillInFile(selected)) setSelected(file.nodes[0] as EspRecord);
+  }
+
+  function redo() {
+    if (!history.redo()) return;
+    changed({ reindex: true });
+    if (file && selected && !stillInFile(selected)) setSelected(file.nodes[0] as EspRecord);
+  }
+
+  function created(r: EspRecord) {
+    changed({ reindex: true });
+    select(r, true);
   }
 
   function restoreDraft() {
     if (!file || !pendingDraft) return;
     const { applied, missing } = applyDraft(file, pendingDraft);
     setPendingDraft(null);
+    history.clear(); // a restored draft is the starting point, not a step to undo
     changed({ reindex: true });
     setDraftNote(`Restored ${applied} change${applied === 1 ? "" : "s"}${missing ? ` (${missing} no longer matched this file)` : ""}.`);
   }
@@ -264,6 +335,8 @@ export function EspEditor() {
     try {
       const bytes = await load();
       const parsed = parseEsp(bytes, name);
+      originalRef.current = { name, bytes };
+      history.clear();
       sigRef.current = fileSignature(name, bytes.length);
       setPendingDraft(loadDraft(sigRef.current));
       setDraftNote(null);
@@ -292,8 +365,23 @@ export function EspEditor() {
     setSaveFeedback(null);
     try {
       const bytes = serializeEsp(file);
+      // Before the first save of this file, keep a copy of the original next to it (Android app only)
+      let backup: string | undefined;
+      let backupError: string | undefined;
+      const original = originalRef.current;
+      if (original && autoBackupEnabled() && !backupLedger.current.has(original.name, original.bytes.length)) {
+        try {
+          const where = await backupOriginal(original.bytes, original.name);
+          if (where) {
+            backup = where;
+            backupLedger.current.add(original.name, original.bytes.length);
+          }
+        } catch (e) {
+          backupError = e instanceof Error ? e.message : String(e);
+        }
+      }
       const savedTo = await downloadPlugin(bytes, file.name);
-      setSaveFeedback({ failed: false, filename: file.name, ...(savedTo ? { savedTo } : {}) });
+      setSaveFeedback({ failed: false, filename: file.name, ...(savedTo ? { savedTo } : {}), ...(backup ? { backup } : {}), ...(backupError ? { backupError } : {}) });
       // A dispatched click is not proof that the file was saved. Keep edits
       // marked unsaved until a confirmed save mechanism is available.
     } catch (e) {
@@ -405,6 +493,33 @@ export function EspEditor() {
   const pendingDraftRef = useRef(pendingDraft);
   pendingDraftRef.current = pendingDraft;
 
+  // Undo and redo see edits as they are made. Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z (or Y) work when no text box has the focus.
+  useEffect(() => {
+    history.attach();
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoRef.current();
+      } else if ((k === "z" && e.shiftKey) || k === "y") {
+        e.preventDefault();
+        redoRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      history.detach();
+    };
+  }, [history]);
+  const undoRef = useRef(undo);
+  undoRef.current = undo;
+  const redoRef = useRef(redo);
+  redoRef.current = redo;
+
   // "Open with": a plugin tapped in the Files app arrives here, both at launch and while the app is running.
   const openBytesRef = useRef(openBytes);
   openBytesRef.current = openBytes;
@@ -444,7 +559,10 @@ export function EspEditor() {
   return (
     <div className="flex min-h-screen flex-col lg:h-screen">
       <header className="flex flex-wrap items-center gap-3 bg-card px-4 pb-1 pt-[max(0.5rem,env(safe-area-inset-top))]">
-        <h1 className="font-display text-lg tracking-wide text-primary">Skyrim ESP Editor for Android</h1>
+        <h1 className="font-display text-lg tracking-wide text-primary">
+          {APP_TITLE}
+          {IS_TEST_BUILD && <span className="ml-2 rounded bg-modified/20 px-1.5 py-0.5 align-middle text-xs font-medium text-modified">test build</span>}
+        </h1>
         {file && (
           <span className="max-w-full truncate font-mono text-xs text-muted-foreground">
             {countRecords(file.nodes).toLocaleString()} records
@@ -461,6 +579,12 @@ export function EspEditor() {
           <Button variant="ghost" size="icon" className="size-8" onClick={() => setAboutOpen(true)} aria-label="About and credits">
             <Info />
           </Button>
+          <Button variant="ghost" size="icon" className="size-8" onClick={undo} disabled={!file || !history.canUndo} aria-label="Undo" title={history.undoLabel ? `Undo: ${history.undoLabel}` : "Undo"}>
+            <Undo2 />
+          </Button>
+          <Button variant="ghost" size="icon" className="size-8" onClick={redo} disabled={!file || !history.canRedo} aria-label="Redo" title={history.redoLabel ? `Redo: ${history.redoLabel}` : "Redo"}>
+            <Redo2 />
+          </Button>
           <Button variant="ghost" size="icon" className="size-8" onClick={() => setChangesOpen(true)} disabled={!file} aria-label="Review your changes" title="Review your changes">
             <ListChecks />
           </Button>
@@ -470,6 +594,32 @@ export function EspEditor() {
           <Button variant="ghost" size="icon" className="size-8" onClick={() => setCheckOpen(true)} disabled={!file} aria-label="Check plugin" title="Check for missing masters and records">
             <ShieldCheck />
           </Button>
+          <Button variant="ghost" size="icon" className="size-8" onClick={() => setScriptsOpen(true)} disabled={!file} aria-label="Scripts" title="List the Papyrus scripts this plugin uses">
+            <FileCode />
+          </Button>
+          <Button variant="ghost" size="icon" className="size-8" onClick={() => setCompareOpen(true)} disabled={!file} aria-label="Compare plugins" title="Compare with a master or another version">
+            <GitCompare />
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-8" disabled={!file} aria-label="More tools" title="New record, file header, plugin health, load order">
+                <Wrench />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onSelect={() => {
+                  setCopySource(null);
+                  setNewOpen(true);
+                }}
+              >
+                New record…
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setHeaderOpen(true)}>File header…</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setHealthOpen(true)}>Plugin health (ESL, duplicates)…</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setOrderOpen(true)}>Load order conflicts…</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {native && (
             <Button variant="ghost" size="icon" className="size-8" onClick={() => setFolderOpen(true)} aria-label="Save folder" title="Choose where files are saved">
               <FolderCog />
@@ -516,6 +666,10 @@ export function EspEditor() {
                   ? `Saved to ${saveFeedback.savedTo} on your device. Your edits are still here.`
                   : "Check your browser’s Downloads or Android download notification to confirm it completed. This browser cannot confirm that the file reached your device; your edits are still here."}
             </p>
+            {!saveFeedback.failed && saveFeedback.backup && <p className="mt-1 text-muted-foreground">The original was backed up to {saveFeedback.backup}.</p>}
+            {!saveFeedback.failed && saveFeedback.backupError && (
+              <p className="mt-1 text-destructive">The original could not be backed up ({saveFeedback.backupError}). The edited file was saved anyway.</p>
+            )}
             <Button variant="secondary" size="sm" className="mt-2" onClick={save}>
               <Download /> Try download again
             </Button>
@@ -578,7 +732,7 @@ export function EspEditor() {
             {info.localized && (
               <div className="border-b px-3 py-1.5 text-xs text-muted-foreground">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                  <span>{strings ? `Names loaded (${strings.size.toLocaleString()} strings)` : "Names are stored in separate strings files."}</span>
+                  <span>{strings ? `Names loaded (${strings.size.toLocaleString()} strings)` : "Names are stored in separate strings files (pick them, or Skyrim - Interface.bsa)."}</span>
                   <button className="font-medium text-primary underline underline-offset-2" onClick={() => stringsInputRef.current?.click()}>
                     {strings ? "Add files" : "Load strings files"}
                   </button>
@@ -710,7 +864,12 @@ export function EspEditor() {
                 file={file}
                 record={selected}
                 ctx={ctx}
+                history={history}
                 onChange={changed}
+                onCopy={() => {
+                  setCopySource(selected);
+                  setNewOpen(true);
+                }}
                 onDeleted={() => {
                   setSelected(null);
                   setResults((res) => res?.filter((r) => r !== selected) ?? null);
@@ -724,6 +883,7 @@ export function EspEditor() {
           </main>
         </div>
       )}
+      <UpdateDialog open={update.release !== null && !aboutOpen && !setupOpen} release={update.release} onLater={update.later} />
       <AboutDialog
         open={aboutOpen}
         onOpenChange={setAboutOpen}
@@ -742,10 +902,16 @@ export function EspEditor() {
       {file && (
         <ChangesDialog open={changesOpen} onOpenChange={setChangesOpen} file={file} ctx={ctx} rev={rev} onRevert={revert} onGoTo={(r) => select(r, true)} />
       )}
-      {file && <BulkEditDialog open={bulkOpen} onOpenChange={setBulkOpen} file={file} localized={info.localized} onApplied={() => changed()} />}
+      {file && <BulkEditDialog open={bulkOpen} onOpenChange={setBulkOpen} file={file} history={history} localized={info.localized} onApplied={() => changed()} />}
       {file && <ExtractDialog open={extractOpen} onOpenChange={setExtractOpen} file={file} selected={selected} />}
       {file && <ConvertDialog open={convertOpen} onOpenChange={setConvertOpen} file={file} />}
       {file && <CheckDialog open={checkOpen} onOpenChange={setCheckOpen} file={file} onGoTo={(r) => select(r, true)} />}
+      {file && <ScriptsDialog open={scriptsOpen} onOpenChange={setScriptsOpen} file={file} onGoTo={(r) => select(r, true)} />}
+      {file && <CompareDialog open={compareOpen} onOpenChange={setCompareOpen} file={file} history={history} onGoTo={(r) => select(r, true)} onRemoved={() => changed({ reindex: true })} />}
+      {file && <NewRecordDialog open={newOpen} onOpenChange={setNewOpen} file={file} history={history} source={copySource} onCreated={created} />}
+      {file && <HeaderDialog open={headerOpen} onOpenChange={setHeaderOpen} file={file} history={history} onApplied={() => changed()} />}
+      {file && <HealthDialog open={healthOpen} onOpenChange={setHealthOpen} file={file} history={history} onGoTo={(r) => select(r, true)} onApplied={() => changed()} />}
+      {file && <LoadOrderDialog open={orderOpen} onOpenChange={setOrderOpen} file={file} onGoTo={(r) => select(r, true)} />}
       <SaveFolderDialog open={folderOpen} onOpenChange={setFolderOpen} />
     </div>
   );

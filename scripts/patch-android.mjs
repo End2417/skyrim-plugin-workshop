@@ -73,5 +73,12 @@ if (manifest.includes(START)) {
 if (!/android:launchMode="singleTask"/.test(next)) {
   console.warn("warning: MainActivity is not singleTask, so a file opened while the app is running starts a second copy.");
 }
+// The "update available" check asks GitHub for the newest release, which needs internet access. Capacitor's template has this
+// permission already; make sure of it, so the check cannot fail silently if a template ever leaves it out.
+if (!/android\.permission\.INTERNET/.test(next)) {
+  if (!/<application\b/.test(next)) throw new Error("AndroidManifest.xml has no <application> element.");
+  next = next.replace(/<application\b/, `<uses-permission android:name="android.permission.INTERNET" />\n\n    <application`);
+  console.log("added the INTERNET permission");
+}
 writeFileSync(manifestPath, next);
 console.log(`patched ${manifestPath}`);

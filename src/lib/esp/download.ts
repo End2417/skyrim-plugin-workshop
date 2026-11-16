@@ -1,5 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import { usableSaveFolder, getSaveFolder, writeToFolder } from "../native/espFiles";
+import { APP_FOLDER } from "../variant";
+import { backupFileName } from "./backup";
 
 // Browsers cannot report whether an anchor download reached storage, and the Capacitor
 // WebView ignores blob downloads entirely. In the Android app the file is written straight
@@ -31,7 +33,7 @@ async function writeChunks(
   }
 }
 
-const FOLDER = "ESP Editor";
+const FOLDER = APP_FOLDER; // "ESP Editor TEST" in the test build, so its files stay apart from the normal app's
 
 /** "Mod.esp" -> "Mod (1).esp", "Mod (2).esp", ... so an existing file is never overwritten or blocked. */
 function numbered(name: string, n: number): string {
@@ -49,8 +51,8 @@ async function existingNames(fs: typeof import("@capacitor/filesystem")): Promis
   }
 }
 
-/** Saves into the phone's Documents/ESP Editor folder and returns that location. Falls back to the share sheet. */
-async function saveNative(bytes: Uint8Array, filename: string): Promise<string | void> {
+/** Saves into the phone's Documents/ESP Editor folder and returns that location. Falls back to the share sheet (unless `share` is off, as for backups, which throw instead). */
+async function saveNative(bytes: Uint8Array, filename: string, share = true): Promise<string | void> {
   const fs = await import("@capacitor/filesystem");
   const safeName = filename.replace(/[\\/:*?"<>|]/g, "_") || "plugin.esp";
   if (getSaveFolder()) {
@@ -79,6 +81,7 @@ async function saveNative(bytes: Uint8Array, filename: string): Promise<string |
       console.warn(`Saving as ${candidate} failed:`, e);
     }
   }
+  if (!share) throw new Error(`Could not write ${safeName} to Documents/${FOLDER}.`);
   const { Share } = await import("@capacitor/share");
   const path = `export/${safeName}`;
   await writeChunks(fs, fs.Directory.Cache, path, bytes);
@@ -94,6 +97,15 @@ async function notify(text: string): Promise<void> {
   } catch {
     /* the on-screen banner still reports the result */
   }
+}
+
+/**
+ * Saves a copy of the original file as "Name.esp.bak" in the same place Save uses. Only the Android app can confirm a
+ * write, so in a browser this does nothing and returns null. Throws if the copy could not be written.
+ */
+export async function backupOriginal(bytes: Uint8Array, filename: string): Promise<string | null> {
+  if (!Capacitor.isNativePlatform()) return null;
+  return (await saveNative(bytes, backupFileName(filename), false)) ?? null;
 }
 
 export function downloadPlugin(bytes: Uint8Array, filename: string): void | Promise<string | void> {
