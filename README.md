@@ -30,6 +30,7 @@ Current capabilities include:
 - a Papyrus script report listing the scripts a plugin uses, the well-known libraries they come from and what those need installed, and script properties that point at records that are not there;
 - Compare: the open plugin against its master or against another version of the mod, with the added, removed, and changed records and the changed fields shown before and after, and removal of the records identical to the master (ITM);
 - load order conflicts across several plugins, showing which records more than one of them changes, who wins, and what the overwritten versions had;
+- merging several plugins into one new plugin, picked together from your files or from the Skyrim folder, with a preview of everything that goes in, every FormID renumbered, and the changes that different mods make to the same record (an NPC given a sword by one mod and armor by another) combined instead of one overwriting the other;
 - conversion of Special Edition plugins to Legendary Edition, including their strings files;
 - an automatic backup of the original file (`Name.esp.bak`) before the first save, on Android;
 - drafts that keep your unsaved edits, including records you created, on the device and offer them back when you reopen the file;
@@ -51,6 +52,27 @@ When you edit a record, the app remembers which records changed. **Extract** the
 Before you extract, the checklist button lists exactly which records changed, and lets you revert any of them. Extracting does not change the open file.
 
 Records you create with **New record** or **Copy** do not exist in the original plugin, so Extract writes them as new records of the extracted plugin, with new FormIDs, and renumbers the fields that point at them. A chosen record that points at one brings it along automatically. When you add records to an existing patch instead, they get FormIDs the patch does not use yet.
+
+## How merging works
+
+**Merge** (a button in the toolbar and on the start screen; no plugin needs to be open) combines several plugins into one new plugin. Pick the plugins to merge, several at once, with **Add plugins…**, or tick them in a list of the plugins in your Skyrim folder when you have given the app access to it. If a plugin is open it starts in the list (with its unsaved edits) and can be taken out. Put them in load order. Nothing is written until you press **Merge**, and the plugins you add are never changed.
+
+**Preview the merge** shows what will go in: how many records are new and how many change a master's record, the masters of the new plugin, every plugin's record types, every record with its old and new FormID, and the records that several plugins change. Then it:
+
+1. gives the new plugin one list of masters (all the masters of all the plugins, vanilla ones in the game's order), without the plugins being merged, because their records are now inside it;
+2. gives every record of the merged plugins a FormID in the new plugin's own range. A record keeps its local ID when no other plugin uses it, and gets the next free one when another does. A plugin that needs another plugin of the merge (it lists it as a master) has its references to it pointed at the merged records;
+3. renumbers every reference the editor can find: the typed fields, the properties of scripts (including quest aliases), the labels of cell, world and topic groups, the record headers, and the list of overridden forms in a master's header;
+4. in fields it has no layout for (condition parameters, for example), renumbers only values that clearly point at a record the plugin made itself, and says how many it changed (switch it off in the dialog);
+5. writes the file, reads it back, and runs the same check as Check plugin plus a check that no FormID is used twice.
+
+**Records that several plugins change are combined, not picked between.** A mod that gives an NPC a sword and another that gives the same NPC armor both change that NPC's record; the merged NPC gets both. To tell what each mod changed, each copy is compared with the original record, and the changes that do not collide are all applied:
+
+- the original is the copy of the plugin that makes the record when that plugin is part of the merge, and otherwise the record from the **original plugin**. When you have given the app access to your Skyrim folder, Skyrim.esm and the plugins that patch it (Update.esm, and any other game plugin the merged plugins list as a master) are read from there by themselves, only when plugins change the same record differently, and kept while the dialog is open so a new preview does not read them again. Without the folder you can add them yourself in the dialog; they are only read. Without the original of a record that comes from a master, only one whole version of it can be kept, and the preview says which file to add. Only FormID lists of masters are remembered between sessions (for Check plugin), never their records;
+- the subrecords of the record are lined up: changes in different places are all kept, and when two plugins add something at the same place (two items for the same NPC) both additions are kept. Counts that go with a list (the item count, the keyword count, and so on) are corrected;
+- when both plugins changed the same subrecord, its fields are compared one by one, or its list entries are lined up, using the field layouts; flag fields are compared bit by bit, so one mod setting "Essential" and another setting "Protected" give both;
+- only when both plugins changed the very same field to different values do they collide. The later plugin's value is used (or the one you tap in the conflict list) and the preview names the field.
+
+What merging does not do: the navigation index (NAVI) is left out and references inside navigation meshes are not renumbered, so regenerate navigation for the merged plugin in the Creation Kit or xEdit; a record's script list (VMAD) is one block, so two plugins that both change the scripts of one record collide; fields the editor has no layout for are compared as a whole, so two plugins that change them differently collide too; localized plugins and plugins of different editions (LE and SE) are refused; scripts, SKSE plugins, meshes, textures and archives are not part of a plugin and must still be installed; and plugins that need one of the merged plugins as a master must be merged too or patched.
 
 ## How Special Edition conversion works
 
@@ -89,7 +111,9 @@ Every release build is signed with the same key, so a new APK installs over the 
 
 ## Known limitations
 
-- Masters cannot be reordered or removed, and a master can be added only to a plugin that has no records of its own. Doing it otherwise renumbers every FormID of the plugin's own records and every reference to them, and the editor only knows the reference fields of the record types it has layouts for.
+- Masters cannot be reordered or removed in the open plugin, and a master can be added only to a plugin that has no records of its own. Doing it otherwise renumbers every FormID of the plugin's own records and every reference to them, and the editor only knows the reference fields of the record types it has layouts for. Merge plugins does renumber, into a new file, and tells you what it could not read.
+- Merging leaves out the navigation index (NAVI) and does not renumber references inside navigation meshes, treats a record's script list as one block (two mods that both change it collide), compares fields the editor has no layout for as a whole, refuses localized plugins and mixes of Legendary and Special Edition, and does not merge scripts, SKSE plugins, meshes or archives. Reading Skyrim.esm for a merge takes a while on a phone the first time and is not kept after the dialog closes. It has been tested on generated plugins, not yet on a large set of real mods.
+- Merged plugins keep the cell blocks of the original FormIDs, so a cell that had to be renumbered can sit in a block that does not match its new FormID. The game does not use those blocks to find cells. Values inside fields the editor has no layout for are only renumbered when they clearly point at the plugin's own records, and only at four-byte boundaries.
 - The editor only describes the record types and fields it has layouts for. Everything else shows as raw bytes, and the layout check in To LE and Check plugin only looks at what is described.
 - A new record starts with its Editor ID and the few fields the game needs. Add the rest from the record's field list.
 - New and copied records go into an extract (or a patch) as new records with new FormIDs, and references to them are renumbered in the fields the editor has a layout for. A reference to a new record inside a script property, or in a field with no layout, is not renumbered. Records with their own child groups (cells, worldspaces, dialogue topics) and placed references cannot be copied.
@@ -109,7 +133,7 @@ Every release build is signed with the same key, so a new APK installs over the 
 
 The project builds with GitHub Actions. Before the first run, add three repository secrets, `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, and `KEY_ALIAS`, which hold the app's signing key. The key is never stored in the repository. Run the **Build Android** workflow from the **Actions** tab to build a signed APK from the files in the repository.
 
-To update the app from a project zip, upload the zip to the repository root or to `updates/`, committing straight to `main`, or start the **Import zip and build** workflow by hand and set `zip_path`. The workflow copies the zip's files into the repository (website pages in `docs/` included), commits them, and builds the app. Optional inputs are a version (for example `1.5.0`), whether to create a GitHub release with the APK, whether to delete repository files that are not in the zip, and whether to keep the zip. If `release-notes/<version>.md` exists, it becomes the release text. The workflow does not copy `.github/` from the zip, so edit workflows in the repository itself.
+To update the app from a project zip, upload the zip to the repository root or to `updates/`, committing straight to `main`, or start the **Import zip and build** workflow by hand and set `zip_path`. The workflow copies the zip's files into the repository (website pages in `docs/` included), commits them, and builds the app. Optional inputs are a version (for example `1.6.0`), whether to create a GitHub release with the APK, whether to delete repository files that are not in the zip, and whether to keep the zip. If `release-notes/<version>.md` exists, it becomes the release text. The workflow does not copy `.github/` from the zip, so edit workflows in the repository itself.
 
 To work on the code, run `npm install` and `npm run dev`, and `npm test` runs the tests. The editor logic lives in `src/lib/esp/` and has no screen code in it, so it can be tested on its own.
 

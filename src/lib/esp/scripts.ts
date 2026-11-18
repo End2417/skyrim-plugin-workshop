@@ -59,6 +59,8 @@ class VmadError extends Error {}
 class Reader {
   readonly dv: DataView;
   o = 0;
+  /** Called with every object FormID read and the offset it sits at, so a caller can rewrite it. */
+  visitor: ((formId: number, at: number) => void) | undefined;
   constructor(readonly d: Uint8Array) {
     this.dv = new DataView(d.buffer, d.byteOffset, d.byteLength);
   }
@@ -117,14 +119,18 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_:]*$/;
 
 function readObject(r: Reader, objectFormat: number): { formId: number; alias: number } {
   if (objectFormat === 1) {
+    const at = r.o;
     const formId = r.u32();
     const alias = r.i16();
     r.u16();
+    r.visitor?.(formId, at);
     return { formId, alias };
   }
   r.u16();
   const alias = r.i16();
+  const at = r.o;
   const formId = r.u32();
+  r.visitor?.(formId, at);
   return { formId, alias };
 }
 
@@ -201,9 +207,14 @@ function readScript(r: Reader, objectFormat: number, version: number, kind: Scri
   return { name, kind, status, properties };
 }
 
-/** Reads the script list of a VMAD subrecord (plus fragment and alias scripts for quests, dialogue and packages). */
-export function readVmad(data: Uint8Array, recordType: string): VmadInfo {
+/**
+ * Reads the script list of a VMAD subrecord (plus fragment and alias scripts for quests, dialogue and packages).
+ * `visitor` is called for every object FormID found (script properties, array entries, quest alias owners) with the
+ * offset of its 4 bytes in `data`; merging uses it to renumber them.
+ */
+export function readVmad(data: Uint8Array, recordType: string, visitor?: (formId: number, at: number) => void): VmadInfo {
   const r = new Reader(data);
+  r.visitor = visitor;
   const info: VmadInfo = { version: 0, objectFormat: 0, scripts: [], complete: true };
   try {
     info.version = r.i16();

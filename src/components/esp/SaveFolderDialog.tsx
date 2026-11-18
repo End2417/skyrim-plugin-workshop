@@ -4,7 +4,7 @@ import { FolderCog } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { autoBackupEnabled, setAutoBackup } from "@/lib/esp/backup";
-import { APP_FOLDER } from "@/lib/variant";
+import { APP_FOLDER } from "@/lib/appInfo";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { chooseSaveFolder, clearSaveFolder, getSaveFolder, nativeFilesAvailable, usableSaveFolder, type SaveFolder } from "@/lib/native/espFiles";
 

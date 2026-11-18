@@ -1,6 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { usableSaveFolder, getSaveFolder, writeToFolder } from "../native/espFiles";
-import { APP_FOLDER } from "../variant";
+import { APP_FOLDER } from "../appInfo";
 import { backupFileName } from "./backup";
 
 // Browsers cannot report whether an anchor download reached storage, and the Capacitor
@@ -33,7 +33,7 @@ async function writeChunks(
   }
 }
 
-const FOLDER = APP_FOLDER; // "ESP Editor TEST" in the test build, so its files stay apart from the normal app's
+const FOLDER = APP_FOLDER;
 
 /** "Mod.esp" -> "Mod (1).esp", "Mod (2).esp", ... so an existing file is never overwritten or blocked. */
 function numbered(name: string, n: number): string {

@@ -11,7 +11,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const androidDir = process.argv[2] ?? join(root, "android");
 
 const config = readFileSync(join(root, "capacitor.config.ts"), "utf8");
-const appId = process.env.CAP_APP_ID || /appId:[^\n]*?["']([^"']+)["']/.exec(config)?.[1];
+const appId = /appId:[^\n]*?["']([^"']+)["']/.exec(config)?.[1];
 if (!appId) throw new Error("Could not read appId from capacitor.config.ts");
 
 const javaDir = join(androidDir, "app/src/main/java", ...appId.split("."));

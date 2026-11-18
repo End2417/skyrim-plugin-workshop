@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Capacitor } from "@capacitor/core";
 import { Checkbox } from "@/components/ui/checkbox";
 import { browserStore, checkForUpdate, fetchJson, setUpdateCheckEnabled, updateCheckEnabled, type CheckOutcome } from "@/lib/update";
-import { IS_TEST_BUILD, APP_TITLE } from "@/lib/variant";
+import { APP_TITLE } from "@/lib/appInfo";
 import { APP_VERSION } from "@/lib/version";
 
 /** Set to true to show the credits every time the app opens instead of only the first time. */
@@ -43,7 +43,7 @@ const CREDITS: [string, string][] = [
 
 /** The version, and (in the Android app) the update check's switch and a button to check right now. */
 function VersionInfo() {
-  const canCheck = Capacitor.isNativePlatform() && !IS_TEST_BUILD;
+  const canCheck = Capacitor.isNativePlatform();
   const [enabled, setEnabled] = useState(() => updateCheckEnabled(browserStore()));
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CheckOutcome | null>(null);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, ArrowLeftRight, ArrowUp, Download, FileCode, FolderCog, FolderOpen, GitCompare, Info, ListChecks, PackageOpen, Redo2, ShieldCheck, SlidersHorizontal, Undo2, Wrench, X } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowLeftRight, ArrowUp, Download, FileCode, FolderCog, FolderOpen, GitCompare, GitMerge, Info, ListChecks, PackageOpen, Redo2, ShieldCheck, SlidersHorizontal, Undo2, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -8,7 +8,7 @@ import { backupOriginal, downloadPlugin } from "@/lib/esp/download";
 import { autoBackupEnabled, BackupLedger } from "@/lib/esp/backup";
 import { chooseLanguage, listArchiveStrings, parseBsa, pluginBase, readBsaFile, stringsFileName } from "@/lib/esp/bsa";
 import { isArchiveFileName } from "@/lib/esp/masterImport";
-import { APP_TITLE, IS_TEST_BUILD } from "@/lib/variant";
+import { APP_TITLE } from "@/lib/appInfo";
 import { onFileOpened, readOpenedFile, takePendingFile, type OpenedFile } from "@/lib/native/espFiles";
 import { buildSearchIndex, filterIndex, hasFieldQuery, searchIndex, type SearchIndex } from "@/lib/esp/search";
 import { applyDraft, clearDraft, fileSignature, loadDraft, makeDraft, saveDraft, type Draft } from "@/lib/esp/draft";
@@ -47,6 +47,7 @@ import { ScriptsDialog } from "./ScriptsDialog";
 import { HeaderDialog } from "./HeaderDialog";
 import { HealthDialog } from "./HealthDialog";
 import { LoadOrderDialog } from "./LoadOrderDialog";
+import { MergeDialog } from "./MergeDialog";
 import { NewRecordDialog } from "./NewRecordDialog";
 import { BulkEditDialog } from "./BulkEditDialog";
 import { ConvertDialog } from "./ConvertDialog";
@@ -80,6 +81,7 @@ export function EspEditor() {
   const [headerOpen, setHeaderOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
   const [orderOpen, setOrderOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   /** The record the "new record" dialog copies, or null to make an empty one. */
   const [copySource, setCopySource] = useState<EspRecord | null>(null);
@@ -98,8 +100,8 @@ export function EspEditor() {
   const [indexedFile, setIndexedFile] = useState<EspFile | null>(null);
   const [shown, setShown] = useState(PAGE_SIZE);
   const [aboutOpen, setAboutOpen] = useFirstLaunchAbout();
-  // Newer release on GitHub? Only in the Android app, and not in the test app (which has versions of its own)
-  const update = useUpdateCheck(native && !IS_TEST_BUILD);
+  // Newer release on GitHub? Only in the Android app
+  const update = useUpdateCheck(native);
   const [changesOpen, setChangesOpen] = useState(false);
   const [strings, setStrings] = useState<StringTable | null>(null);
   const [stringsMsg, setStringsMsg] = useState<string | null>(null);
@@ -561,7 +563,6 @@ export function EspEditor() {
       <header className="flex flex-wrap items-center gap-3 bg-card px-4 pb-1 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <h1 className="font-display text-lg tracking-wide text-primary">
           {APP_TITLE}
-          {IS_TEST_BUILD && <span className="ml-2 rounded bg-modified/20 px-1.5 py-0.5 align-middle text-xs font-medium text-modified">test build</span>}
         </h1>
         {file && (
           <span className="max-w-full truncate font-mono text-xs text-muted-foreground">
@@ -645,6 +646,9 @@ export function EspEditor() {
           <Button variant="secondary" size="sm" onClick={() => setExtractOpen(true)} disabled={!file} title="Save only the records you changed as a new plugin">
             <PackageOpen /> Extract
           </Button>
+          <Button variant="secondary" size="sm" onClick={() => setMergeOpen(true)} title="Combine several plugins into one new plugin">
+            <GitMerge /> Merge
+          </Button>
           <Button size="sm" onClick={save} disabled={!file}>
             <Download /> Save
           </Button>
@@ -721,9 +725,14 @@ export function EspEditor() {
             <p className="mt-2 text-sm text-muted-foreground">
               Drop a .esp or .esm file here, or pick one. It never leaves your device.
             </p>
-            <Button className="mt-6" onClick={() => inputRef.current?.click()} disabled={loading}>
-              <FolderOpen /> {loading ? "Opening…" : "Choose file"}
-            </Button>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+              <Button onClick={() => inputRef.current?.click()} disabled={loading}>
+                <FolderOpen /> {loading ? "Opening…" : "Choose file"}
+              </Button>
+              <Button variant="secondary" onClick={() => setMergeOpen(true)}>
+                <GitMerge /> Merge plugins
+              </Button>
+            </div>
           </div>
         </div>
       ) : (
@@ -912,6 +921,7 @@ export function EspEditor() {
       {file && <HeaderDialog open={headerOpen} onOpenChange={setHeaderOpen} file={file} history={history} onApplied={() => changed()} />}
       {file && <HealthDialog open={healthOpen} onOpenChange={setHealthOpen} file={file} history={history} onGoTo={(r) => select(r, true)} onApplied={() => changed()} />}
       {file && <LoadOrderDialog open={orderOpen} onOpenChange={setOrderOpen} file={file} onGoTo={(r) => select(r, true)} />}
+      <MergeDialog open={mergeOpen} onOpenChange={setMergeOpen} file={file} />
       <SaveFolderDialog open={folderOpen} onOpenChange={setFolderOpen} />
     </div>
   );
