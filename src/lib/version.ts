@@ -1,9 +1,9 @@
 // The version of this build. The release workflow passes the version typed into "Import zip and build" as VITE_APP_VERSION,
 // so a release always knows its own number. Builds made without a version fall back to the number below, which is bumped
 // with each release (see AGENTS.md).
-const FALLBACK_VERSION = "1.6.0";
+const FALLBACK_VERSION = "1.6.1";
 
-/** "v1.6.0" or "1.6.0" -> "1.6.0"; anything that is not a version (1.2, 1.2.3 or 1.2.3.4) -> null. */
+/** "v1.6.1" or "1.6.1" -> "1.6.1"; anything that is not a version (1.2, 1.2.3 or 1.2.3.4) -> null. */
 export function cleanVersion(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const t = v.trim().replace(/^v/i, "");

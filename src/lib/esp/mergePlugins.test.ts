@@ -4,6 +4,7 @@ import {
   mergedFileName,
   mergePlugins,
   planMerge,
+  sliceOriginal,
   sortByDependencies,
   type MergeOptions,
   type MergePlan,
@@ -26,6 +27,7 @@ import {
   type Subrecord,
 } from "./format";
 import { readVmad } from "./scripts";
+import { zlibSync } from "fflate";
 import { ids, rawGroup, rawRecord, u32 } from "./testPlugin";
 
 // ---------- helpers that build plugins with real group hierarchies ----------
@@ -698,6 +700,37 @@ describe("combining changes to the same record", () => {
       expect(failing.plan.issues.some((i) => i.level === "warning" && /could not be read automatically \(the folder is gone\)/.test(i.message))).toBe(true);
     });
 
+    it("can be given just the records that are compared, so a huge original does not have to stay in memory", async () => {
+      const full = () => plugin(SKYRIM, [], [guard(acbs(0, 5), coct(1), cnto(VANILLA_ITEM)), top("MISC", [rec("MISC", 0x00000f00, "Gold")]), top("KYWD", [rec("KYWD", 0x00000a00, "Unrelated")])], { flags: 1 });
+      let asked: ReadonlySet<string> | null = null;
+      let slim: EspFile | null = null;
+      const originalSource = async (_n: string[], _m: string[], _s: (l: string) => void, keys: ReadonlySet<string>) => {
+        asked = keys;
+        slim = sliceOriginal(full(), keys);
+        return [slim];
+      };
+      const { out, plan } = await merged([swordMod(), armorMod()], { originalSource });
+      // only the guard is compared, and the source was told so
+      expect([...asked!]).toEqual([`skyrim.esm:${GUARD & 0xffffff}`]);
+      expect(recordsOf(slim!).map((r) => getEditorId(r))).toEqual(["Guard"]);
+      expect(itemsOf(byEdid(out, "Guard")!)).toHaveLength(3);
+      expect(plan.conflicts[0]).toMatchObject({ status: "combined", collisions: 0 });
+      // the copy owns its bytes and keeps the header (its masters), so it works as an original on its own
+      const original = full();
+      const copy = sliceOriginal(original, asked!);
+      const a = recordsOf(original).find((r) => getEditorId(r) === "Guard")!;
+      const b = recordsOf(copy)[0]!;
+      expect(b.raw.buffer).not.toBe(a.raw.buffer);
+      expect(b.raw).toEqual(a.raw);
+      expect(fileInfo(copy).masters).toEqual(fileInfo(original).masters);
+      expect(copy.name).toBe(SKYRIM);
+    });
+
+    it("keeps one whole version when the records that are compared were left out of the original", async () => {
+      const { plan } = await merged([swordMod(), armorMod()], { originalSource: async (_n, _m, _s, _keys) => [sliceOriginal(skyrim(), new Set())] });
+      expect(plan.conflicts[0]).toMatchObject({ status: "picked", needs: SKYRIM });
+    });
+
     it("ignores anything it returns that is already part of the merge", async () => {
       const { plan } = await merged([swordMod(), armorMod()], { originalSource: async () => [skyrim(), swordMod()] });
       expect(plan.originals.map((o) => o.name)).toEqual([SKYRIM]);
@@ -717,6 +750,103 @@ describe("combining changes to the same record", () => {
     const g = byEdid(out, "Guard")!;
     const wanted = new Set(recordsOf(out).map((r) => r.formId >>> 0));
     for (const id of itemsOf(g)) expect(wanted.has(id) || id === VANILLA_ITEM).toBe(true);
+  });
+});
+
+// ---------- cases real plugins have ----------
+
+describe("cases real plugins have", () => {
+  const packed = (type: string, formId: number, edid: string, subs: Subrecord[] = []): Uint8Array => {
+    const raw = rec(type, formId, edid, subs);
+    const body = raw.subarray(24);
+    const z = new Uint8Array(zlibSync(body));
+    const out = new Uint8Array(28 + z.length);
+    out.set(raw.subarray(0, 24));
+    const dv = new DataView(out.buffer);
+    dv.setUint32(4, 4 + z.length, true);
+    dv.setUint32(8, 0x40000, true);
+    dv.setUint32(24, body.length, true);
+    out.set(z, 28);
+    return out;
+  };
+
+  it("merges compressed records and writes the result compressed", async () => {
+    const original = plugin(SKYRIM, [], [top("KYWD", [packed("KYWD", 0x00000a00, "Base", [kwda(1)])])], { flags: 1 });
+    const mk = (name: string, extra: number) => plugin(name, [SKYRIM], [top("KYWD", [packed("KYWD", 0x00000a00, "Base", [kwda(1, extra)])])]);
+    const { out, result } = await merged([mk("A.esp", 0x10), mk("B.esp", 0x20)], { originals: [original] });
+    const r = byEdid(out, "Base")!;
+    expect(r.flags & 0x40000).toBe(0x40000);
+    expect(refsOf(r)).toEqual([1, 0x10, 0x20]);
+    expect(result.report.verification).toMatchObject({ problems: 0, duplicates: 0 });
+  });
+
+  it("uses the edits made in the open plugin that have not been saved", async () => {
+    const a = plugin("A.esp", [SKYRIM], [top("KYWD", [rec("KYWD", 0x01000800, "KwA", [kwda(1)])])]);
+    const edited = byEdid(a, "KwA")!;
+    const subs = getSubrecords(edited);
+    subs.find((x) => x.type === "KWDA")!.data = ids(1, 7);
+    edited.dirty = true;
+    const b = plugin("B.esp", [SKYRIM], [top("KYWD", [rec("KYWD", 0x01000801, "KwB")])]);
+    const { out } = await merged([a, b]);
+    expect(refsOf(byEdid(out, "KwA")!)).toEqual([1, 7]);
+  });
+
+  it("puts a reference where the plugin that wins moved it between a cell's persistent and temporary references", async () => {
+    const ref = (id: number) => rawRecord("REFR", id, [{ type: "NAME", data: u32(0x0001a000) }]);
+    const a = plugin("A.esp", [SKYRIM], [cellTop([[rec("CELL", 0x01000800, "Cell"), grp(6, 0x01000800, [grp(9, 0x01000800, [ref(0x01000801)])])]])]);
+    // B (needs A) makes the same reference persistent
+    const b = plugin("B.esp", [SKYRIM, "A.esp"], [cellTop([[rec("CELL", 0x01000800, "Cell"), grp(6, 0x01000800, [grp(8, 0x01000800, [ref(0x01000801)])])]])]);
+    const { out } = await merged([a, b]);
+    expect(recordsOf(out).filter((r) => r.type === "REFR")).toHaveLength(1);
+    expect(groupsOf(out.nodes, 8)).toHaveLength(1);
+    expect(groupsOf(out.nodes, 8)[0]!.children).toHaveLength(1);
+    expect(groupsOf(out.nodes, 9)).toHaveLength(0); // nothing is left in the temporary group, so it is not written
+  });
+
+  it("merges plugins that have no records", async () => {
+    const { out, result } = await merged([plugin("A.esp", [SKYRIM], []), plugin("B.esp", [SKYRIM, "Update.esm"], [])]);
+    expect(recordsOf(out)).toHaveLength(0);
+    expect(fileInfo(out).masters).toEqual([SKYRIM, "Update.esm"]);
+    expect(result.report.records).toBe(0);
+  });
+
+  it("copes with a record that appears twice in one plugin", async () => {
+    const dup = plugin("A.esp", [SKYRIM], [top("KYWD", [rec("KYWD", 0x01000800, "First", [kwda(1)]), rec("KYWD", 0x01000800, "Second", [kwda(2)])])]);
+    const { out, plan } = await merged([dup, plugin("B.esp", [SKYRIM], [top("KYWD", [rec("KYWD", 0x01000801, "Other")])])]);
+    expect(recordsOf(out).filter((r) => r.type === "KYWD" && (r.formId >>> 0) === 0x01000800)).toHaveLength(1);
+    expect(plan.ok).toBe(true);
+  });
+
+  it("treats master names without regard to case", async () => {
+    const a = plugin("A.esp", ["Skyrim.esm"], [top("KYWD", [rec("KYWD", 0x01000800, "KwA", [kwda(0x00000f00)])])]);
+    const b = plugin("B.esp", ["skyrim.ESM"], [top("KYWD", [rec("KYWD", 0x01000801, "KwB", [kwda(0x00000f00)])])]);
+    const { out, plan } = await merged([a, b]);
+    expect(plan.masters).toHaveLength(1);
+    expect(refsOf(byEdid(out, "KwB")!)).toEqual([0x00000f00]);
+  });
+
+  it("refuses to make a plugin with more masters than a plugin can have", async () => {
+    const masters = Array.from({ length: 255 }, (_, i) => `Master${i}.esm`);
+    const plan = (await planMerge([plugin("A.esp", masters.slice(0, 200), []), plugin("B.esp", masters.slice(100), [])]))!;
+    expect(plan.ok).toBe(false);
+    expect(plan.issues.some((i) => i.level === "error" && /masters/.test(i.message))).toBe(true);
+  });
+
+  it("combines a deletion in one plugin with changes in another", async () => {
+    const orig = plugin(SKYRIM, [], [top("KYWD", [rec("KYWD", 0x00000a00, "Base", [kwda(1)], 0)])], { flags: 1 });
+    const a = plugin("A.esp", [SKYRIM], [top("KYWD", [rec("KYWD", 0x00000a00, "Base", [kwda(1)], 0x20)])]); // marked deleted
+    const b = plugin("B.esp", [SKYRIM], [top("KYWD", [rec("KYWD", 0x00000a00, "Base", [kwda(1, 5)], 0)])]);
+    const { out } = await merged([a, b], { originals: [orig] });
+    const r = byEdid(out, "Base")!;
+    expect(r.flags & 0x20).toBe(0x20);
+    expect(refsOf(r)).toEqual([1, 5]);
+  });
+
+  it("merges a plugin with a copy of itself without changing anything", async () => {
+    const make = (name: string) => plugin(name, [SKYRIM], [top("KYWD", [rec("KYWD", 0x00000a00, "Base", [kwda(1)])])]);
+    const { out, plan } = await merged([make("A.esp"), make("B.esp")]);
+    expect(recordsOf(out)).toHaveLength(1);
+    expect(plan.conflicts[0]).toMatchObject({ identical: true, status: "combined", collisions: 0 });
   });
 });
 

@@ -14,6 +14,7 @@ import {
   buildMerged,
   mergedFileName,
   planMerge,
+  sliceOriginal,
   sortByDependencies,
   type MergeAction,
   type MergeConflict,
@@ -99,8 +100,12 @@ function Form({ file, onOpenChange }: Props) {
   const [choose, setChoose] = useState<Record<string, number>>({});
   /** The plugins in the Skyrim folder the person gave access to, when there is one. */
   const [game, setGame] = useState<GameFolder | null>(null);
-  /** Original plugins already read from the Skyrim folder, kept while this dialog is open so a new preview does not read them again. */
-  const readOriginals = useRef(new Map<string, EspFile>());
+  /**
+   * Original plugins already read from the Skyrim folder, kept while this dialog is open so a new preview does not read
+   * them again. Only the records that were compared are kept (a parsed Skyrim.esm would take hundreds of MB of a phone's
+   * memory), together with which records those are, so a later merge that needs others reads the file again.
+   */
+  const readOriginals = useRef(new Map<string, { file: EspFile; keys: Set<string> }>());
 
   const [plan, setPlan] = useState<MergePlan | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -137,7 +142,7 @@ function Form({ file, onOpenChange }: Props) {
   }, []);
 
   /** Reads the original plugins a merge needs from the Skyrim folder, without the person having to add them. */
-  const originalSource: OriginalSource = async (needed, masters, say) => {
+  const originalSource: OriginalSource = async (needed, masters, say, keys) => {
     if (!game) return [];
     const byName = new Map(game.plugins.map((e) => [e.name.toLowerCase(), e]));
     const want = new Set(needed.map((n) => n.toLowerCase()));
@@ -148,14 +153,18 @@ function Form({ file, onOpenChange }: Props) {
     for (const name of want) {
       const entry = byName.get(name);
       if (!entry) continue;
-      let f = readOriginals.current.get(name);
-      if (!f) {
-        say(`Reading ${entry.name} from your Skyrim folder. Large files take a while the first time`);
-        await new Promise<void>((r) => setTimeout(r, 0));
-        f = parseEsp(await readFolderFile(entry), entry.name);
-        readOriginals.current.set(name, f);
+      const have = readOriginals.current.get(name);
+      if (have && [...keys].every((k) => have.keys.has(k))) {
+        out.push(have.file);
+        continue;
       }
-      out.push(f);
+      say(`Reading ${entry.name} from your Skyrim folder. Large files take a while the first time`);
+      await new Promise<void>((r) => setTimeout(r, 0));
+      // the whole file is parsed once and then dropped: only the records that are compared stay
+      const covered = new Set([...keys, ...(have?.keys ?? [])]);
+      const slim = sliceOriginal(parseEsp(await readFolderFile(entry), entry.name), covered);
+      readOriginals.current.set(name, { file: slim, keys: covered });
+      out.push(slim);
     }
     return out;
   };
@@ -163,7 +172,9 @@ function Form({ file, onOpenChange }: Props) {
   const busy = planning || building || loading;
 
   /** Anything that changes what would be merged throws the preview away (and stops one that is running). */
-  const invalidate = () => {
+  const invalidate = (resetChoices = false) => {
+    // Choices of whose version to use are stored by plugin position and record, so they only mean something for the same list
+    if (resetChoices) setChoose({});
     token.current++;
     setPlan(null);
     setBuilt(null);
@@ -191,7 +202,7 @@ function Form({ file, onOpenChange }: Props) {
   async function add(list: File[], asOriginals = false) {
     setLoading(true);
     setError(null);
-    invalidate();
+    invalidate(!asOriginals);
     const seen = taken();
     const added: Item[] = [];
     const problems: string[] = [];
@@ -212,7 +223,7 @@ function Form({ file, onOpenChange }: Props) {
   async function addFromFolder(entries: FolderItem[], asOriginals: boolean) {
     setLoading(true);
     setError(null);
-    invalidate();
+    invalidate(!asOriginals);
     const seen = taken();
     const added: Item[] = [];
     const problems: string[] = [];
@@ -232,7 +243,7 @@ function Form({ file, onOpenChange }: Props) {
   }
 
   const move = (i: number, d: -1 | 1) => {
-    invalidate();
+    invalidate(true);
     setItems((cur) => {
       const j = i + d;
       if (j < 0 || j >= cur.length) return cur;
@@ -364,7 +375,7 @@ function Form({ file, onOpenChange }: Props) {
                   className="size-7"
                   disabled={busy}
                   onClick={() => {
-                    invalidate();
+                    invalidate(true);
                     setItems((cur) => cur.filter((x) => x !== it));
                   }}
                   aria-label={`Remove ${it.file.name}`}
@@ -396,7 +407,7 @@ function Form({ file, onOpenChange }: Props) {
                 size="sm"
                 disabled={busy}
                 onClick={() => {
-                  invalidate();
+                  invalidate(true);
                   setItems((cur) => [...cur, itemOf(nextId.current++, file, true)]);
                 }}
                 title="Use the plugin that is open in the editor, with your unsaved edits"
@@ -410,7 +421,7 @@ function Form({ file, onOpenChange }: Props) {
               disabled={busy || items.length < 2}
               title="Put every plugin after the plugins it needs"
               onClick={() => {
-                invalidate();
+                invalidate(true);
                 setItems((cur) => sortByDependencies(cur.map((c) => c.file)).map((f) => cur.find((c) => c.file === f)!));
               }}
             >

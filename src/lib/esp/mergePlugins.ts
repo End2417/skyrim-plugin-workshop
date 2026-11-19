@@ -18,7 +18,8 @@
 // Every FormID the editor can find is renumbered: typed fields (defs.ts), script properties (VMAD), group labels, the
 // record header and the file header's overridden-forms list. Fields the editor has no layout for cannot be read, so they
 // are only fixed where a value is unmistakably a reference to the plugin's own records; the plan and the report say so.
-import { resolveSubDef, visitFormIds } from "./decode";
+import { visitFormIds } from "./decode";
+import { findSubDef, type FieldDef } from "./defs";
 import {
   FLAG_COMPRESSED,
   encodeZString,
@@ -47,13 +48,33 @@ const FLAG_LOCALIZED = 0x00000080;
 const FLAG_ESL = 0x00000200;
 const MAX_MASTERS = 254;
 const ENGINE_RESERVED = 0x800;
-const SLICE = 1500;
 /** Masters in the order the game loads them; anything else keeps the order it was first seen in. */
 const KNOWN_MASTER_ORDER = ["skyrim.esm", "update.esm", "dawnguard.esm", "hearthfires.esm", "dragonborn.esm"];
 /** Group types whose label is the FormID of the record they belong to. */
 const OWNER_LABEL_GROUPS = new Set([1, 6, 7, 8, 9, 10]);
 
 const yieldToUi = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/**
+ * Keeps long loops from freezing the screen. Call it every few items: it hands control back to the UI only after about a
+ * frame of work (browsers make chained zero-delay timers wait at least 4 ms each, so yielding every few dozen items would
+ * add seconds to a big merge), reports progress at most every 100 ms (each report re-renders the dialog), and returns
+ * true when the merge was cancelled.
+ */
+function makePacer(hooks: MergeHooks, cancelled: () => boolean) {
+  let lastYield = performance.now();
+  let lastReport = 0;
+  return async (fraction: number, label: string): Promise<boolean> => {
+    if (performance.now() - lastYield < 12) return cancelled();
+    await yieldToUi();
+    lastYield = performance.now();
+    if (lastYield - lastReport > 100) {
+      lastReport = lastYield;
+      hooks.progress?.(fraction, label);
+    }
+    return cancelled();
+  };
+}
 const lower = (s: string) => s.toLowerCase();
 const u32 = (b: Uint8Array) => new DataView(b.buffer, b.byteOffset, b.byteLength);
 
@@ -95,9 +116,34 @@ export interface MergeOptions {
 /**
  * `needed` are the plugins whose records several plugins change and that are missing as originals; `masters` is the merged
  * plugin's master list, for plugins that are worth reading as well (a patch such as Update.esm changes records of the
- * master it patches); `say` reports what is being read. Returns the plugins it could find, in any order.
+ * master it patches); `say` reports what is being read; `keys` are the records that have to be compared (see
+ * {@link sliceOriginal}), so a source can keep just those and let a huge file such as Skyrim.esm go. Returns the plugins it
+ * could find, in any order.
  */
-export type OriginalSource = (needed: string[], masters: string[], say: (label: string) => void) => Promise<EspFile[]>;
+export type OriginalSource = (needed: string[], masters: string[], say: (label: string) => void, keys: ReadonlySet<string>) => Promise<EspFile[]>;
+
+/** Identifies a record by the plugin that makes it and its local ID, the same way for every plugin that changes it. */
+function identityKey(file: EspFile, masters: string[], r: EspRecord): string {
+  const hi = r.formId >>> 24;
+  return `${lower(hi >= masters.length ? file.name : masters[hi]!)}:${r.formId & 0xffffff}`;
+}
+
+/**
+ * A copy of an original plugin that holds only the records in `keys` (as the source callback receives them), with their
+ * bytes copied so the rest of a huge file can be freed. A parsed plugin costs about 250 bytes per record and keeps its whole
+ * file alive while any record of it is referenced; Skyrim.esm would take roughly 450 MB, the few records a merge compares
+ * take next to nothing.
+ */
+export function sliceOriginal(file: EspFile, keys: ReadonlySet<string>): EspFile {
+  const masters = fileInfo(file).masters;
+  const head = file.nodes[0] as EspRecord;
+  const copy = (r: EspRecord): EspRecord => ({ ...r, uid: nextUid(), raw: r.raw.slice(), subrecords: r.subrecords && r.subrecords.map((x) => ({ type: x.type, data: x.data.slice() })), parent: null, editorIdCache: undefined, nameCache: undefined, original: undefined });
+  const nodes: EspNode[] = [copy(head)];
+  for (const r of walkRecords(file.nodes)) {
+    if (r.type !== "TES4" && keys.has(identityKey(file, masters, r))) nodes.push(copy(r));
+  }
+  return { name: file.name, nodes };
+}
 
 export interface MergeHooks {
   progress?: (fraction: number, label: string) => void;
@@ -354,6 +400,7 @@ function headerOf(file: EspFile) {
 /** Works out the whole merge without changing anything. Returns null if cancelled. `files` are in load order. */
 export async function planMerge(files: EspFile[], opts: MergeOptions = {}, hooks: MergeHooks = {}): Promise<MergePlan | null> {
   const cancelled = hooks.cancelled ?? (() => false);
+  const pace = makePacer(hooks, cancelled);
   const issues: MergeIssue[] = [];
   const error = (message: string, input?: number) => issues.push({ level: "error", message, ...(input === undefined ? {} : { input }) });
   const warn = (message: string, input?: number) => issues.push({ level: "warning", message, ...(input === undefined ? {} : { input }) });
@@ -467,11 +514,7 @@ export async function planMerge(files: EspFile[], opts: MergeOptions = {}, hooks
     const m = mappings[k]!;
     for (const r of walkRecords(files[k]!.nodes)) {
       if (r.type === "TES4") continue;
-      if (++walked % SLICE === 0) {
-        await yieldToUi();
-        if (cancelled()) return null;
-        hooks.progress?.(0.4 * (k / files.length), "Reading the plugins");
-      }
+      if ((++walked & 31) === 0 && (await pace(0.4 * (k / files.length), "Reading the plugins"))) return null;
       infos[k]!.records++;
       if (r.type === "NAVM" || r.type === "NAVI") infos[k]!.navmeshes++;
       if (r.type === "NAVI") continue; // the navigation index cannot be rebuilt here, so it is left out
@@ -589,11 +632,7 @@ export async function planMerge(files: EspFile[], opts: MergeOptions = {}, hooks
   const prepared: Prepared[] = [];
   let prepWork = 0;
   for (const [id, list] of shared) {
-    if (++prepWork % 50 === 0) {
-      await yieldToUi();
-      if (cancelled()) return null;
-      hooks.progress?.(0.4 + 0.05 * Math.min(1, prepWork / Math.max(1, shared.length)), "Comparing the records they share");
-    }
+    if ((++prepWork & 7) === 0 && (await pace(0.4 + 0.05 * Math.min(1, prepWork / Math.max(1, shared.length)), "Comparing the records they share"))) return null;
     const picked = opts.choose?.[id];
     const winnerEntry = (picked !== undefined ? list.find((e) => e.input === picked) : undefined) ?? list[list.length - 1]!;
     const scratchCounters = newCounters();
@@ -646,7 +685,7 @@ export async function planMerge(files: EspFile[], opts: MergeOptions = {}, hooks
     if (needed.length > 0) {
       try {
         hooks.progress?.(0.42, "Looking for the original plugins");
-        const got = await opts.originalSource(needed, mergedMasters, (label) => hooks.progress?.(0.45, label));
+        const got = await opts.originalSource(needed, mergedMasters, (label) => hooks.progress?.(0.45, label), new Set(wanted.keys()));
         if (cancelled()) return null;
         for (const f of got) {
           if (indexByName.has(lower(f.name)) || have.has(lower(f.name)) || extra.some((x) => lower(x.name) === lower(f.name))) continue;
@@ -676,13 +715,8 @@ export async function planMerge(files: EspFile[], opts: MergeOptions = {}, hooks
       const fm = fileInfo(f).masters;
       for (const r of walkRecords(f.nodes)) {
         if (r.type === "TES4") continue;
-        if (++seenRecords % (SLICE * 4) === 0) {
-          await yieldToUi();
-          if (cancelled()) return null;
-          hooks.progress?.(0.4 + 0.1 * (j / originals.length), "Reading the original plugins");
-        }
-        const hi = r.formId >>> 24;
-        const key = `${lower(hi >= fm.length ? f.name : fm[hi]!)}:${r.formId & 0xffffff}`;
+        if ((++seenRecords & 255) === 0 && (await pace(0.4 + 0.1 * (j / originals.length), "Reading the original plugins"))) return null;
+        const key = identityKey(f, fm, r);
         if (wanted.get(key) === r.type) baseOf.set(key, { record: r, k: files.length + j }); // a later original overrides an earlier one
       }
     }
@@ -693,11 +727,7 @@ export async function planMerge(files: EspFile[], opts: MergeOptions = {}, hooks
   const needs = new Set<string>();
   let work = 0;
   for (const pc of prepared) {
-    if (++work % 50 === 0) {
-      await yieldToUi();
-      if (cancelled()) return null;
-      hooks.progress?.(0.5 + 0.1 * Math.min(1, work / Math.max(1, prepared.length)), "Combining the records they share");
-    }
+    if ((++work & 7) === 0 && (await pace(0.5 + 0.1 * Math.min(1, work / Math.max(1, prepared.length)), "Combining the records they share"))) return null;
     const { id, list, picked, winnerEntry, edid, versions, winnerCounters, identical, sides } = pc;
     const scratch = newCounters();
 
@@ -886,100 +916,141 @@ function addCounters(into: Counters, from: Counters) {
 
 const newCounters = (): Counters => ({ refs: 0, scriptRefs: 0, scriptRecords: 0, unknownRewritten: 0, unknownScanned: 0, unreadable: [] });
 
-/** Writes the renumbered FormID into a copy of the data. */
-function patcher(sub: Subrecord) {
-  let data: Uint8Array | null = null;
-  return {
-    set(at: number, value: number) {
-      data ??= sub.data.slice();
-      u32(data).setUint32(at, value >>> 0, true);
-    },
-    get data() {
-      return data;
-    },
-  };
-}
-
 /** Condition layout: operator and value (8), function (4), parameter 1 at 12, parameter 2 at 16, run on (20), reference (24, a known FormID field), parameter 3 at 28. */
 const CTDA_PARAMS = [12, 16, 28];
 
-/** The record's subrecords with every reference renumbered, or null when nothing changed. */
-function rewriteRecord(r: EspRecord, k: number, remap: Remapper, p: PlanInternals, c: Counters): Subrecord[] | null {
-  const subs = subrecordsOf(r);
-  const edidSub = subs.find((s) => s.type === "EDID");
-  const edid = edidSub ? zstringValue(edidSub.data) : "";
-  const m = p.mappings[k]!;
-  const own = p.ownIds[k]!;
-  let out: Subrecord[] | null = null;
-  let counted = false;
+/**
+ * Renumbers the references inside records. One instance is reused for every record of a plan or build (nothing is
+ * allocated per record or per subrecord except what actually changes), which matters for plugins with hundreds of
+ * thousands of records. It holds state while a record is being rewritten, so it is not reentrant.
+ */
+class Rewriter {
+  private k = 0;
+  private c!: Counters;
+  private m!: InputMapping;
+  private own!: Set<number>;
+  private sub!: Subrecord;
+  private patched: Uint8Array | null = null;
 
-  /** A value that is unmistakably a reference to a record this plugin makes, or one that another plugin of the merge makes. */
-  const isOwnRef = (v: number) => {
-    const low = v & 0xffffff;
-    if (m.ownSlot < 1 || low < ENGINE_RESERVED) return false;
-    const hi = v >>> 24;
-    if (hi === m.ownSlot) return own.has(low);
-    const t = hi < m.ownSlot ? m.slots[hi] : undefined;
-    return !!t && t.kind === "input" && p.ownIds[t.input]!.has(low);
+  constructor(
+    private readonly remap: Remapper,
+    private readonly p: PlanInternals,
+  ) {}
+
+  /** Writes a renumbered FormID into a copy of the current subrecord's data (made on the first change). */
+  private set(at: number, value: number) {
+    this.patched ??= this.sub.data.slice();
+    u32(this.patched).setUint32(at, value >>> 0, true);
+  }
+
+  private readonly onFormId = (id: number, _field: unknown, at: number) => {
+    const to = this.remap.map(this.k, id);
+    if (to !== id >>> 0) {
+      this.set(at, to);
+      this.c.refs++;
+    }
   };
 
-  subs.forEach((sub, i) => {
-    const patch = patcher(sub);
-    if (sub.type === "VMAD") {
-      if (!counted) (c.scriptRecords++, (counted = true));
-      const infoV = readVmad(sub.data, r.type, (id, at) => {
-        const to = remap.map(k, id);
-        if (to !== id >>> 0) {
-          patch.set(at, to);
-          c.scriptRefs++;
+  private readonly onScriptId = (id: number, at: number) => {
+    const to = this.remap.map(this.k, id);
+    if (to !== id >>> 0) {
+      this.set(at, to);
+      this.c.scriptRefs++;
+    }
+  };
+
+  /** A value that is unmistakably a reference to a record this plugin makes, or one that another plugin of the merge makes. */
+  private isOwnRef(v: number): boolean {
+    const low = v & 0xffffff;
+    if (this.m.ownSlot < 1 || low < ENGINE_RESERVED) return false;
+    const hi = v >>> 24;
+    if (hi === this.m.ownSlot) return this.own.has(low);
+    const t = hi < this.m.ownSlot ? this.m.slots[hi] : undefined;
+    return !!t && t.kind === "input" && this.p.ownIds[t.input]!.has(low);
+  }
+
+  private scan(view: DataView, at: number) {
+    if (at + 4 > view.byteLength) return;
+    const v = view.getUint32(at, true);
+    if (!this.isOwnRef(v)) return;
+    const to = this.remap.map(this.k, v);
+    if (to !== v) {
+      this.set(at, to);
+      this.c.unknownRewritten++;
+    }
+  }
+
+  /** The record's subrecords with every reference renumbered, or null when nothing changed. */
+  rewrite(r: EspRecord, k: number, c: Counters): Subrecord[] | null {
+    const subs = subrecordsOf(r);
+    this.k = k;
+    this.c = c;
+    this.m = this.p.mappings[k]!;
+    this.own = this.p.ownIds[k]!;
+    const unknown = this.p.options.rewriteUnknown;
+    let out: Subrecord[] | null = null;
+    let counted = false;
+    let edid: string | null = null; // only a few layouts depend on the Editor ID, so it is read when one does
+
+    for (let i = 0; i < subs.length; i++) {
+      const sub = subs[i]!;
+      this.sub = sub;
+      this.patched = null;
+      if (sub.type === "VMAD") {
+        if (!counted) {
+          c.scriptRecords++;
+          counted = true;
         }
-      });
-      if (!infoV.complete && infoV.note && !/^Fragment scripts of/.test(infoV.note)) {
-        c.unreadable.push(`${getEditorId(r) ?? "(no Editor ID)"} [${r.type}:${hex8(r.formId)}]: ${infoV.note}`);
-      }
-    } else {
-      let def: ReturnType<typeof resolveSubDef> = null;
-      try {
-        def = resolveSubDef(r.type, sub, edid);
-      } catch {
-        def = null;
-      }
-      if (def) {
-        visitFormIds(def, sub.data, 0, false, (id, _field, at) => {
-          const to = remap.map(k, id);
-          if (to !== id >>> 0) {
-            patch.set(at, to);
-            c.refs++;
-          }
-        });
-      }
-      if (p.options.rewriteUnknown) {
-        const view = u32(sub.data);
-        const scan = (at: number) => {
-          if (at + 4 > sub.data.length) return;
-          const v = view.getUint32(at, true);
-          if (!isOwnRef(v)) return;
-          const to = remap.map(k, v);
-          if (to !== v) {
-            patch.set(at, to);
-            c.unknownRewritten++;
-          }
-        };
-        if (sub.type === "CTDA") {
-          // condition parameters: which ones are FormIDs depends on the function, so only unmistakable ones are changed
-          for (const at of CTDA_PARAMS) scan(at);
-        } else if (!def || def.k === "bytes") {
-          c.unknownScanned++;
-          for (let at = 0; at + 4 <= sub.data.length; at += 4) scan(at);
+        const info = readVmad(sub.data, r.type, this.onScriptId);
+        if (!info.complete && info.note && !/^Fragment scripts of/.test(info.note)) {
+          c.unreadable.push(`${getEditorId(r) ?? "(no Editor ID)"} [${r.type}:${hex8(r.formId)}]: ${info.note}`);
         }
+      } else {
+        let def: FieldDef | null = null;
+        const d = findSubDef(r.type, sub.type);
+        if (d) {
+          try {
+            if (typeof d.def === "function") {
+              if (edid === null) {
+                const e = subs.find((x) => x.type === "EDID");
+                edid = e ? zstringValue(e.data) : "";
+              }
+              def = d.def({ edid, data: sub.data });
+            } else def = d.def;
+          } catch {
+            def = null;
+          }
+        }
+        if (def) visitFormIds(def, sub.data, 0, false, this.onFormId);
+        if (unknown) {
+          if (sub.type === "CTDA") {
+            // condition parameters: which ones are FormIDs depends on the function, so only unmistakable ones are changed
+            const view = u32(sub.data);
+            for (const at of CTDA_PARAMS) this.scan(view, at);
+          } else if (!def || def.k === "bytes") {
+            c.unknownScanned++;
+            const view = u32(sub.data);
+            for (let at = 0; at + 4 <= sub.data.length; at += 4) this.scan(view, at);
+          }
+        }
+      }
+      if (this.patched) {
+        out ??= subs.slice();
+        out[i] = { type: sub.type, data: this.patched };
       }
     }
-    if (patch.data) {
-      out ??= subs.slice();
-      out[i] = { type: sub.type, data: patch.data };
-    }
-  });
-  return out;
+    this.patched = null;
+    return out;
+  }
+}
+
+const rewriters = new WeakMap<Remapper, Rewriter>();
+
+/** The record's subrecords with every reference renumbered, or null when nothing changed. */
+function rewriteRecord(r: EspRecord, k: number, remap: Remapper, p: PlanInternals, c: Counters): Subrecord[] | null {
+  let w = rewriters.get(remap);
+  if (!w) rewriters.set(remap, (w = new Rewriter(remap, p)));
+  return w.rewrite(r, k, c);
 }
 
 // ---------- build ----------
@@ -1020,6 +1091,7 @@ class DestIndex {
  */
 export async function buildMerged(files: EspFile[], plan: MergePlan, hooks: MergeHooks = {}, outputName?: string): Promise<MergeResult | null> {
   const cancelled = hooks.cancelled ?? (() => false);
+  const pace = makePacer(hooks, cancelled);
   if (!plan.ok) throw new Error(plan.issues.find((i) => i.level === "error")?.message ?? "These plugins cannot be merged.");
   if (files.length !== plan.inputs.length || files.some((f, i) => f.name !== plan.inputs[i]!.name)) {
     throw new Error("The plugins changed since the preview. Preview the merge again.");
@@ -1057,11 +1129,7 @@ export async function buildMerged(files: EspFile[], plan: MergePlan, hooks: Merg
   let seen = 0;
   const lay = async (dest: EspNode[], parent: EspGroup | null, incoming: EspNode[], k: number): Promise<boolean> => {
     for (const n of incoming) {
-      if (++seen % SLICE === 0) {
-        await yieldToUi();
-        if (cancelled()) return false;
-        hooks.progress?.(0.6 + 0.15 * Math.min(1, seen / Math.max(1, plan.entries.length)), "Laying out the records");
-      }
+      if ((++seen & 31) === 0 && (await pace(0.6 + 0.15 * Math.min(1, seen / Math.max(1, plan.entries.length)), "Laying out the records"))) return false;
       if (n.kind === "group") {
         if (n.groupType === 0 && String.fromCharCode(...n.label.subarray(0, 4)) === "NAVI") continue; // cannot be rebuilt here
         const label = remapLabel(k, n);
@@ -1127,11 +1195,7 @@ export async function buildMerged(files: EspFile[], plan: MergePlan, hooks: Merg
         if (!(await finish(n.children, n))) return false;
         continue;
       }
-      if (++written % SLICE === 0) {
-        await yieldToUi();
-        if (cancelled()) return false;
-        hooks.progress?.(0.75 + 0.15 * Math.min(1, written / Math.max(1, plan.counts.records)), "Renumbering references");
-      }
+      if ((++written & 31) === 0 && (await pace(0.75 + 0.15 * Math.min(1, written / Math.max(1, plan.counts.records)), "Renumbering references"))) return false;
       const e = entryOf.get(n)!;
       if (e.merge) {
         // several plugins' changes combined; already renumbered. The compression flag stays what the kept copy has.
